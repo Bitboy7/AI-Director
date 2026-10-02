@@ -176,3 +176,44 @@ export function subscribeJob(jobId: number, onEvent: (job: Job) => void): () => 
 export function assetUrl(path: string): string {
   return `${BASE}/assets/${path}`
 }
+
+export interface VerifyResult {
+  status: 'ok' | 'error' | 'unavailable' | 'not_needed' | 'mock'
+  detail?: string
+}
+
+export async function getCredentials(): Promise<Record<string, Record<string, string>>> {
+  const data = await request<{ providers: Record<string, Record<string, string>> }>(
+    '/settings/credentials',
+  )
+  return data.providers
+}
+
+export async function putCredentials(
+  provider: string,
+  credentials: Record<string, string>,
+): Promise<void> {
+  await request(`/settings/credentials/${provider}`, {
+    method: 'PUT',
+    body: JSON.stringify({ credentials }),
+  })
+}
+
+export async function deleteCredential(provider: string, key: string): Promise<void> {
+  await request(`/settings/credentials/${provider}/${key}`, { method: 'DELETE' })
+}
+
+export async function verifyCredential(provider: string): Promise<VerifyResult> {
+  return request(`/settings/credentials/${provider}/verify`, { method: 'POST' })
+}
+
+export async function setPhaseCompleted(
+  projectId: number,
+  phase: number,
+  completed: boolean,
+): Promise<Project> {
+  return request(`/projects/${projectId}/phases/${phase}`, {
+    method: 'PUT',
+    body: JSON.stringify({ completed }),
+  })
+}
