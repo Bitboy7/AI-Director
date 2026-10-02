@@ -19,7 +19,20 @@ frontend/   Admin web (Vite + React + TypeScript + Tailwind + shadcn/ui, tema os
 - Node.js 20+ (solo frontend)
 - Ollama (opcional pero recomendado: genera los guiones con un modelo local)
 
-## Arranque del backend
+## Arranque rápido (todo en uno)
+
+```powershell
+python start.py                 # API + workers + frontend (+ Redis via Docker si falta)
+python start.py --no-frontend   # solo backend
+python start.py --check         # verifica el entorno sin arrancar nada
+python start.py --skip-install  # no reinstala dependencias
+```
+
+Crea el venv e instala dependencias si faltan, levanta Redis con Docker si no está
+corriendo, arranca la API (8000), los 3 workers arq y Vite (5173), y detiene todo
+con Ctrl+C. Logs: `logs/start.log` y `logs/<servicio>.log`.
+
+## Arranque manual del backend
 
 ```powershell
 cd backend
