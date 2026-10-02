@@ -18,6 +18,7 @@ from app.models import (
     Fragment,
     Job,
     JobStatus,
+    JobType,
     Project,
     Resource,
     ResourceVariant,
