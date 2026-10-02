@@ -1,10 +1,13 @@
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import SessionDep
 from app.api.episodes import get_episode_or_404
-from app.models import DialogueLine, Fragment
-from app.schemas import FragmentCreate, FragmentRead, FragmentUpdate
+from app.jobs import queue as queue_module
+from app.models import DialogueLine, Fragment, Job, JobStatus, JobType
+from app.schemas import FragmentCreate, FragmentRead, FragmentUpdate, JobRead
 
 router = APIRouter(prefix="/api/v1")
 
@@ -76,3 +79,24 @@ async def update_fragment(fragment_id: int, payload: FragmentUpdate, session: Se
         ]
     await session.commit()
     return await load_fragment(session, fragment_id)
+
+
+@router.post("/fragments/{fragment_id}/generate", response_model=JobRead, status_code=202)
+async def generate_fragment(fragment_id: int, session: SessionDep):
+    fragment = await get_fragment_or_404(session, fragment_id)
+    job = Job(
+        type=JobType.video_gen,
+        status=JobStatus.queued,
+        payload={"fragment_id": fragment_id},
+    )
+    session.add(job)
+    await session.commit()
+    try:
+        await queue_module.enqueue("video", "run_video_gen", job.id)
+    except queue_module.QueueUnavailableError as exc:
+        job.status = JobStatus.failed
+        job.error = "queue_unavailable"
+        job.updated_at = datetime.now()
+        await session.commit()
+        raise HTTPException(status_code=503, detail="queue_unavailable") from exc
+    return job
