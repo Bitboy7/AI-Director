@@ -36,6 +36,8 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 async def init_db() -> None:
+    from app import models  # noqa: F401
+
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
