@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -28,8 +28,10 @@ class Job(TimestampMixin, Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    type: Mapped[JobType] = mapped_column(String(40))
-    status: Mapped[JobStatus] = mapped_column(String(20), default=JobStatus.queued)
+    type: Mapped[JobType] = mapped_column(Enum(JobType, native_enum=False))
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(JobStatus, native_enum=False), default=JobStatus.queued
+    )
     progress: Mapped[int] = mapped_column(Integer, default=0)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     result: Mapped[dict] = mapped_column(JSON, default=dict)

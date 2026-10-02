@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import JSON, ForeignKey, String, Text
+from sqlalchemy import JSON, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -23,7 +23,7 @@ class Resource(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
-    type: Mapped[ResourceType] = mapped_column(String(30))
+    type: Mapped[ResourceType] = mapped_column(Enum(ResourceType, native_enum=False))
     name: Mapped[str] = mapped_column(String(200))
     profile: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -57,7 +57,9 @@ class ReferenceImage(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     variant_id: Mapped[int] = mapped_column(ForeignKey("resource_variants.id", ondelete="CASCADE"))
     path: Mapped[str] = mapped_column(String(500))
-    origin: Mapped[ImageOrigin] = mapped_column(String(30), default=ImageOrigin.uploaded)
+    origin: Mapped[ImageOrigin] = mapped_column(
+        Enum(ImageOrigin, native_enum=False), default=ImageOrigin.uploaded
+    )
     kind: Mapped[str] = mapped_column(String(30), default="reference")
 
     variant: Mapped[ResourceVariant] = relationship(back_populates="reference_images")

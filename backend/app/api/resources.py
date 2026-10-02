@@ -1,16 +1,18 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from sqlalchemy import select
 
 from app.api.deps import SessionDep
 from app.api.projects import get_project_or_404
-from app.models import Resource, ResourceVariant
+from app.models import AssetKind, ImageOrigin, ReferenceImage, Resource, ResourceVariant
 from app.schemas import (
+    ReferenceImageRead,
     ResourceCreate,
     ResourceRead,
     ResourceVariantCreate,
     ResourceVariantRead,
     ResourceVariantUpdate,
 )
+from app.services.storage import save_upload
 
 router = APIRouter(prefix="/api/v1")
 
@@ -119,3 +121,27 @@ async def delete_variant(variant_id: int, session: SessionDep):
     variant = await get_variant_or_404(session, variant_id)
     await session.delete(variant)
     await session.commit()
+
+
+@router.post("/variants/{variant_id}/images", response_model=ReferenceImageRead)
+async def upload_reference_image(
+    variant_id: int, session: SessionDep, file: UploadFile = File(...)
+):
+    variant = await get_variant_or_404(session, variant_id)
+    resource = await session.get(Resource, variant.resource_id)
+    project_id = resource.project_id
+    try:
+        rel, _asset = await save_upload(session, project_id, AssetKind.image, file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    image = ReferenceImage(
+        variant_id=variant_id, path=rel, origin=ImageOrigin.uploaded, kind="reference"
+    )
+    session.add(image)
+    await session.commit()
+    return image
+
+
+@router.post("/variants/{variant_id}/images/generate", status_code=501)
+async def generate_reference_image(variant_id: int):
+    raise HTTPException(status_code=501, detail="image_provider_not_configured")
