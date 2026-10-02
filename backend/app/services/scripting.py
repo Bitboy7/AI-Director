@@ -1,9 +1,9 @@
 import json
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.providers.base import LLMProvider
-from app.schemas.script import ScriptDraft, ScriptGenerationRequest
+from app.schemas.script import ResourcesDraft, ScriptDraft, ScriptGenerationRequest
 
 
 class ScriptValidationError(ValueError):
@@ -12,6 +12,23 @@ class ScriptValidationError(ValueError):
 
 def _schema_json() -> str:
     return json.dumps(ScriptDraft.model_json_schema(), ensure_ascii=False)
+
+
+def parse_model_json(text: str, model: type[BaseModel]) -> BaseModel:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise ScriptValidationError(f"JSON inválido del LLM: {exc}") from exc
+    try:
+        return model.model_validate(data)
+    except ValidationError as exc:
+        raise ScriptValidationError(f"El JSON no cumple el schema: {exc}") from exc
 
 
 def build_system_prompt() -> str:
@@ -42,20 +59,7 @@ def build_user_prompt(req: ScriptGenerationRequest) -> str:
 
 
 def parse_script_json(text: str) -> ScriptDraft:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ScriptValidationError(f"JSON inválido del LLM: {exc}") from exc
-    try:
-        return ScriptDraft.model_validate(data)
-    except ValidationError as exc:
-        raise ScriptValidationError(f"El JSON no cumple el schema: {exc}") from exc
+    return parse_model_json(text, ScriptDraft)
 
 
 def repair_prompt(bad_json: str, error: str) -> str:
@@ -79,3 +83,44 @@ async def generate_script_draft(
                 raise
             text = await provider.complete(system, repair_prompt(text, str(exc)), json_mode=True)
     raise ScriptValidationError("no se pudo generar un guion válido")
+
+
+def build_resources_system_prompt() -> str:
+    return (
+        "Eres un diseñador de producción de series cortas. Recibes la sinopsis del "
+        "proyecto y los recursos existentes (personajes, escenas, utilería). Debes "
+        "responder ÚNICAMENTE con un objeto JSON válido que siga este JSON Schema:\n"
+        + json.dumps(ResourcesDraft.model_json_schema(), ensure_ascii=False)
+        + "\n\nReglas:\n"
+        "- Propón variantes nuevas para recursos existentes (apariencias alternativas) "
+        "y recursos nuevos si la historia los necesita.\n"
+        "- No repitas variantes cuyo nombre ya existe en el recurso.\n"
+        "- Las descripciones deben ser prompts visuales detallados."
+    )
+
+
+def build_resources_user_prompt(script_context: dict) -> str:
+    return (
+        "Contexto del proyecto:\n"
+        + json.dumps(script_context, ensure_ascii=False, indent=2)
+        + "\nGenera la lista de recursos con sus variantes."
+    )
+
+
+def parse_resources_json(text: str) -> ResourcesDraft:
+    return parse_model_json(text, ResourcesDraft)
+
+
+async def generate_resources_draft(
+    provider: LLMProvider, script_context: dict, retries: int
+) -> ResourcesDraft:
+    system = build_resources_system_prompt()
+    text = await provider.complete(system, build_resources_user_prompt(script_context), json_mode=True)
+    for attempt in range(retries + 1):
+        try:
+            return parse_resources_json(text)
+        except ScriptValidationError as exc:
+            if attempt >= retries:
+                raise
+            text = await provider.complete(system, repair_prompt(text, str(exc)), json_mode=True)
+    raise ScriptValidationError("no se pudo generar una lista de recursos válida")

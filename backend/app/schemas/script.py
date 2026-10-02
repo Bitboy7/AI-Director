@@ -2,6 +2,8 @@ import math
 
 from pydantic import BaseModel, Field
 
+from app.models.resource import ResourceType
+
 
 class ScriptGenerationRequest(BaseModel):
     synopsis: str
@@ -55,6 +57,22 @@ class ScriptDraft(BaseModel):
     scenes: list[ScriptScene] = Field(default_factory=list)
     props: list[ScriptProp] = Field(default_factory=list)
     episodes: list[ScriptEpisode] = Field(default_factory=list)
+
+
+class VariantDraft(BaseModel):
+    name: str
+    description: str = ""
+
+
+class ResourceDraft(BaseModel):
+    type: ResourceType
+    name: str
+    description: str = ""
+    variants: list[VariantDraft] = Field(default_factory=list)
+
+
+class ResourcesDraft(BaseModel):
+    resources: list[ResourceDraft] = Field(default_factory=list)
 
 
 def planned_fragments(duration_seconds: int, fragment_seconds: int = 10) -> int:

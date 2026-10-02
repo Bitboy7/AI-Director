@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import SessionDep
@@ -76,6 +76,30 @@ async def generate_script(
     await session.commit()
     try:
         await queue_module.enqueue("default", "run_script_gen", job.id)
+    except queue_module.QueueUnavailableError as exc:
+        job.status = JobStatus.failed
+        job.error = "queue_unavailable"
+        job.updated_at = datetime.now()
+        await session.commit()
+        raise HTTPException(status_code=503, detail="queue_unavailable") from exc
+    return job
+
+
+@router.post(
+    "/projects/{project_id}/generate-resources", response_model=JobRead, status_code=202
+)
+async def generate_resources(project_id: int, session: SessionDep, payload: dict = Body(default={})):
+    project = await get_project_or_404(session, project_id)
+    job = Job(
+        type=JobType.resource_gen,
+        status=JobStatus.queued,
+        payload={"project_id": project_id},
+        project_id=project_id,
+    )
+    session.add(job)
+    await session.commit()
+    try:
+        await queue_module.enqueue("default", "run_resource_gen", job.id)
     except queue_module.QueueUnavailableError as exc:
         job.status = JobStatus.failed
         job.error = "queue_unavailable"
