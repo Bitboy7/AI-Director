@@ -74,9 +74,35 @@ async def generate_episode(
     )
     project_id = episode.project_id
 
+    existing_video = (
+        await session.execute(
+            select(Job).where(
+                Job.type == JobType.video_gen,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        )
+    ).scalars().all()
+    active_fragment_ids = {j.payload.get("fragment_id") for j in existing_video}
+
+    existing_assembly = (
+        await session.execute(
+            select(Job).where(
+                Job.type == JobType.episode_assembly,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        )
+    ).scalars().all()
+    active_assembly = next(
+        (j for j in existing_assembly if j.payload.get("episode_id") == episode_id),
+        None,
+    )
+
     video_job_ids: list[int] = []
+    assembly_job = active_assembly
     try:
         for fragment in fragments:
+            if fragment.id in active_fragment_ids:
+                continue
             job = Job(
                 type=JobType.video_gen,
                 status=JobStatus.queued,
@@ -85,19 +111,20 @@ async def generate_episode(
             )
             session.add(job)
             await session.flush()
-            await queue_module.enqueue("video", "run_video_gen", job.id)
             video_job_ids.append(job.id)
-        assembly_job = Job(
-            type=JobType.episode_assembly,
-            status=JobStatus.queued,
-            payload={"episode_id": episode_id, "subtitle_burn": subtitle_burn},
-            project_id=project_id,
-        )
-        session.add(assembly_job)
-        await session.flush()
-        await queue_module.enqueue(
-            "assembly", "run_episode_assembly", assembly_job.id
-        )
+            await queue_module.enqueue("video", "run_video_gen", job.id)
+        if assembly_job is None:
+            assembly_job = Job(
+                type=JobType.episode_assembly,
+                status=JobStatus.queued,
+                payload={"episode_id": episode_id, "subtitle_burn": subtitle_burn},
+                project_id=project_id,
+            )
+            session.add(assembly_job)
+            await session.flush()
+            await queue_module.enqueue(
+                "assembly", "run_episode_assembly", assembly_job.id
+            )
     except queue_module.QueueUnavailableError as exc:
         for vid in video_job_ids:
             job = await session.get(Job, vid)
@@ -105,6 +132,10 @@ async def generate_episode(
                 job.status = JobStatus.failed
                 job.error = "queue_unavailable"
                 job.updated_at = datetime.now()
+        if assembly_job is not None and assembly_job.status == JobStatus.queued:
+            assembly_job.status = JobStatus.failed
+            assembly_job.error = "queue_unavailable"
+            assembly_job.updated_at = datetime.now()
         await session.commit()
         raise HTTPException(status_code=503, detail="queue_unavailable") from exc
     await session.commit()

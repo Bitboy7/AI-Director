@@ -58,13 +58,17 @@ async def run_script_gen(ctx: dict, job_id: int) -> None:
         await mark_failed(job_id, f"error del proveedor LLM: {exc}")
         return
 
-    async with get_session_factory()() as session:
-        project = await session.get(Project, project_id)
-        if project is None:
-            await mark_failed(job_id, "proyecto no encontrado")
-            return
-        summary = await apply_script_draft(session, project, draft)
-        await session.commit()
+    try:
+        async with get_session_factory()() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                await mark_failed(job_id, "proyecto no encontrado")
+                return
+            summary = await apply_script_draft(session, project, draft)
+            await session.commit()
+    except Exception as exc:
+        await mark_failed(job_id, f"falló al guardar el guion: {exc}")
+        return
     await mark_succeeded(job_id, summary)
 
 
@@ -113,44 +117,48 @@ async def run_resource_gen(ctx: dict, job_id: int) -> None:
         await mark_failed(job_id, f"error del proveedor LLM: {exc}")
         return
 
-    async with get_session_factory()() as session:
-        created_variants = 0
-        skipped: list[str] = []
-        for rd in draft.resources:
-            result = await session.execute(
-                select(Resource).where(
-                    Resource.project_id == project_id,
-                    Resource.type == rd.type,
-                    Resource.name == rd.name,
-                )
-            )
-            resource = result.scalar_one_or_none()
-            if resource is None:
-                resource = Resource(
-                    project_id=project_id,
-                    type=rd.type,
-                    name=rd.name,
-                    profile={"description": rd.description, "tags": []},
-                )
-                session.add(resource)
-                await session.flush()
-            var_result = await session.execute(
-                select(ResourceVariant).where(ResourceVariant.resource_id == resource.id)
-            )
-            existing_names = {v.name for v in var_result.scalars()}
-            for vd in rd.variants:
-                if vd.name in existing_names:
-                    skipped.append(f"{rd.name}: {vd.name}")
-                    continue
-                session.add(
-                    ResourceVariant(
-                        resource_id=resource.id,
-                        name=vd.name,
-                        description=vd.description,
+    try:
+        async with get_session_factory()() as session:
+            created_variants = 0
+            skipped: list[str] = []
+            for rd in draft.resources:
+                result = await session.execute(
+                    select(Resource).where(
+                        Resource.project_id == project_id,
+                        Resource.type == rd.type,
+                        Resource.name == rd.name,
                     )
                 )
-                created_variants += 1
-        await session.commit()
+                resource = result.scalar_one_or_none()
+                if resource is None:
+                    resource = Resource(
+                        project_id=project_id,
+                        type=rd.type,
+                        name=rd.name,
+                        profile={"description": rd.description, "tags": []},
+                    )
+                    session.add(resource)
+                    await session.flush()
+                var_result = await session.execute(
+                    select(ResourceVariant).where(ResourceVariant.resource_id == resource.id)
+                )
+                existing_names = {v.name for v in var_result.scalars()}
+                for vd in rd.variants:
+                    if vd.name in existing_names:
+                        skipped.append(f"{rd.name}: {vd.name}")
+                        continue
+                    session.add(
+                        ResourceVariant(
+                            resource_id=resource.id,
+                            name=vd.name,
+                            description=vd.description,
+                        )
+                    )
+                    created_variants += 1
+            await session.commit()
+    except Exception as exc:
+        await mark_failed(job_id, f"falló al guardar los recursos: {exc}")
+        return
 
     await mark_succeeded(job_id, {"created_variants": created_variants, "skipped": skipped})
 
@@ -195,21 +203,25 @@ async def run_video_gen(ctx: dict, job_id: int) -> None:
         dest_rel = f"{project.id}/videos/{fragment_id}.mp4"
 
     await mark_running(job_id)
-    provider = get_provider("video", None)
-    task_id = await provider.submit(payload)
-    status = await provider.poll(task_id)
-    while status.state not in ("succeeded", "failed"):
-        if await is_cancelled(job_id):
-            await mark_cancelled(job_id)
-            return
-        await asyncio.sleep(1)
+    try:
+        provider = get_provider("video", None)
+        task_id = await provider.submit(payload)
         status = await provider.poll(task_id)
-    if status.state == "failed":
-        await mark_failed(job_id, status.error or "el proveedor de video falló")
-        return
+        while status.state not in ("succeeded", "failed"):
+            if await is_cancelled(job_id):
+                await mark_cancelled(job_id)
+                return
+            await asyncio.sleep(1)
+            status = await provider.poll(task_id)
+        if status.state == "failed":
+            await mark_failed(job_id, status.error or "el proveedor de video falló")
+            return
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    await provider.download(status.video_url, dest)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        await provider.download(status.video_url, dest)
+    except Exception as exc:
+        await mark_failed(job_id, f"generación de video falló: {exc}")
+        return
 
     async with get_session_factory()() as session:
         fragment = await session.get(Fragment, fragment_id)
@@ -247,11 +259,17 @@ async def run_video_gen(ctx: dict, job_id: int) -> None:
             await _enqueue_safe(ctx, "assembly", "run_episode_assembly", assembly_job.id)
 
 
-async def _enqueue_safe(ctx: dict, queue: str, func_name: str, job_id: int) -> None:
+async def _enqueue_safe(
+    ctx: dict, queue: str, func_name: str, job_id: int, defer_by: float = 0
+) -> None:
     redis = ctx.get("redis")
     if redis is not None:
         await redis.enqueue_job(
-            func_name, job_id, _queue_name=queue, _job_id=str(job_id)
+            func_name,
+            job_id,
+            _queue_name=queue,
+            _job_id=str(job_id),
+            _defer_by=defer_by,
         )
 
 
@@ -271,7 +289,32 @@ async def run_episode_assembly(ctx: dict, job_id: int) -> None:
         pending = any(not f.video_path for f in episode.fragments)
 
     if pending:
-        await _enqueue_safe(ctx, "assembly", "run_episode_assembly", job_id)
+        async with get_session_factory()() as session:
+            episode_fragments = (
+                await session.execute(
+                    select(Fragment).where(Fragment.episode_id == episode_id)
+                )
+            ).scalars().all()
+            fragment_ids = [f.id for f in episode_fragments]
+            video_jobs = (
+                await session.execute(select(Job).where(Job.type == JobType.video_gen))
+            ).scalars().all()
+            related = [j for j in video_jobs if j.payload.get("fragment_id") in fragment_ids]
+            terminal = {JobStatus.succeeded, JobStatus.failed, JobStatus.cancelled}
+            if related and all(j.status in terminal for j in related):
+                missing = [
+                    f"{episode.number}-{f.shot_number}"
+                    for f in episode_fragments
+                    if not f.video_path
+                ]
+                await mark_failed(
+                    job_id,
+                    "faltan videos para los planos: "
+                    + ", ".join(f"[{m}]" for m in missing),
+                )
+                return
+
+        await _enqueue_safe(ctx, "assembly", "run_episode_assembly", job_id, defer_by=5)
         async with get_session_factory()() as session:
             job = await session.get(Job, job_id)
             job.status = JobStatus.queued

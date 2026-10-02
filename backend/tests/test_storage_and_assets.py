@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -68,3 +69,18 @@ async def test_asset_serves_uploaded_file(client):
     r = await client.get(f"/api/v1/assets/{rel}")
     assert r.status_code == 200
     assert r.content == PNG_1X1
+
+
+async def test_upload_with_relative_storage_dir(client, monkeypatch, tmp_path):
+    from app.config import get_settings
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(get_settings(), "storage_dir", Path("storage"))
+
+    vid = await _create_variant(client)
+    r = await client.post(
+        f"/api/v1/variants/{vid}/images",
+        files={"file": ("kai.png", PNG_1X1, "image/png")},
+    )
+    assert r.status_code == 200
+    assert (tmp_path / "storage" / r.json()["path"]).exists()

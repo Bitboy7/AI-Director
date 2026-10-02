@@ -19,7 +19,7 @@ _KIND_DIRS = {
 
 
 def project_dir(project_id: int) -> Path:
-    return get_settings().storage_dir / str(project_id)
+    return get_settings().storage_dir.resolve() / str(project_id)
 
 
 def asset_dir(project_id: int, kind: AssetKind) -> Path:

@@ -145,6 +145,45 @@ class SlowVideoProvider:
         return dest
 
 
+class FailingDownloadProvider:
+    async def submit(self, payload):
+        return "t1"
+
+    async def poll(self, task_id):
+        return VideoTaskStatus(state="succeeded", video_url="x")
+
+    async def download(self, url, dest):
+        raise RuntimeError("disco lleno")
+
+
+async def test_video_job_marks_failed_on_provider_error(
+    db_session, tmp_path, monkeypatch, fake_redis
+):
+    pid, eid = await _setup_episode(db_session, tmp_path, with_videos=False)
+    frag = (await db_session.execute(select(Fragment).where(Fragment.episode_id == eid))).scalars().first()
+    job = Job(
+        type=JobType.video_gen,
+        status=JobStatus.queued,
+        payload={"fragment_id": frag.id},
+    )
+    db_session.add(job)
+    await db_session.commit()
+    job_id = job.id
+
+    from app.jobs import tasks
+
+    monkeypatch.setattr(
+        tasks, "get_provider", lambda kind, name=None: FailingDownloadProvider()
+    )
+
+    await run_video_gen({"redis": fake_redis}, job_id)
+
+    db_session.expire_all()
+    j = await db_session.get(Job, job_id)
+    assert j.status == JobStatus.failed
+    assert "disco lleno" in j.error
+
+
 async def test_video_job_cancel_stops_polling(db_session, tmp_path, monkeypatch, fake_redis):
     pid, eid = await _setup_episode(db_session, tmp_path, with_videos=False)
     result = await db_session.execute(select(Fragment).where(Fragment.episode_id == eid))
@@ -173,3 +212,81 @@ async def test_video_job_cancel_stops_polling(db_session, tmp_path, monkeypatch,
     assert j.status == JobStatus.cancelled
     f = await db_session.get(Fragment, frag_id)
     assert f.video_path is None
+
+
+async def test_assembly_job_fails_when_all_video_jobs_terminal(
+    db_session, tmp_path, fake_redis
+):
+    from app.jobs.tasks import run_episode_assembly
+
+    _pid, eid = await _setup_episode(db_session, tmp_path, with_videos=False)
+    frags = (
+        await db_session.execute(select(Fragment).where(Fragment.episode_id == eid))
+    ).scalars().all()
+    for frag in frags:
+        db_session.add(
+            Job(
+                type=JobType.video_gen,
+                status=JobStatus.failed,
+                payload={"fragment_id": frag.id},
+            )
+        )
+    job = Job(
+        type=JobType.episode_assembly,
+        status=JobStatus.queued,
+        payload={"episode_id": eid, "subtitle_burn": False},
+    )
+    db_session.add(job)
+    await db_session.commit()
+    job_id = job.id
+
+    await run_episode_assembly({"redis": fake_redis}, job_id)
+
+    db_session.expire_all()
+    j = await db_session.get(Job, job_id)
+    assert j.status == JobStatus.failed
+    assert "[1-1]" in j.error and "[1-2]" in j.error
+
+
+async def test_assembly_job_requeues_with_defer_when_videos_pending(
+    db_session, tmp_path, fake_redis
+):
+    from app.jobs.tasks import run_episode_assembly
+
+    _pid, eid = await _setup_episode(db_session, tmp_path, with_videos=False)
+    frags = (
+        await db_session.execute(select(Fragment).where(Fragment.episode_id == eid))
+    ).scalars().all()
+    for frag in frags:
+        db_session.add(
+            Job(
+                type=JobType.video_gen,
+                status=JobStatus.running,
+                payload={"fragment_id": frag.id},
+            )
+        )
+    job = Job(
+        type=JobType.episode_assembly,
+        status=JobStatus.queued,
+        payload={"episode_id": eid, "subtitle_burn": False},
+    )
+    db_session.add(job)
+    await db_session.commit()
+    job_id = job.id
+
+    calls: list[dict] = []
+
+    class SpyRedis:
+        def __init__(self, real):
+            self.real = real
+
+        async def enqueue_job(self, *args, **kwargs):
+            calls.append(kwargs)
+            await self.real.enqueue_job(*args, **kwargs)
+
+    await run_episode_assembly({"redis": SpyRedis(fake_redis)}, job_id)
+
+    db_session.expire_all()
+    j = await db_session.get(Job, job_id)
+    assert j.status == JobStatus.queued
+    assert calls and calls[-1].get("_defer_by") == 5
