@@ -12,6 +12,10 @@ async def test_full_crud_flow(client):
     assert r.json()["id"] == 1
     pid = r.json()["id"]
 
+    r = await client.patch(f"/api/v1/projects/{pid}", json={"video_style": "neon"})
+    assert r.status_code == 200
+    assert r.json()["video_style"] == "neon"
+
     r = await client.post(f"/api/v1/projects/{pid}/episodes", json={"number": 1, "title": "Piloto"})
     assert r.status_code == 200
     eid = r.json()["id"]

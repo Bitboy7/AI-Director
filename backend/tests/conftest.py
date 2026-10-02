@@ -1,5 +1,17 @@
+import fakeredis.aioredis
 import pytest
+from arq.connections import ArqRedis
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import ConnectionPool
+
+
+@pytest.fixture
+async def fake_redis():
+    pool = ConnectionPool(
+        connection_class=fakeredis.aioredis.FakeAsyncRedisConnection,
+        decode_responses=True,
+    )
+    return ArqRedis(pool)
 
 
 @pytest.fixture

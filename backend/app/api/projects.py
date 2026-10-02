@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
@@ -44,6 +46,7 @@ async def update_project(project_id: int, payload: ProjectUpdate, session: Sessi
     project = await get_project_or_404(session, project_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(project, field, value)
+    project.updated_at = datetime.now()
     await session.commit()
     return project
 
