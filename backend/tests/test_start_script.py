@@ -16,7 +16,7 @@ def test_parse_redis_location_custom_port():
 
 
 def test_build_service_commands_default():
-    commands = start.build_service_commands("py", no_frontend=False)
+    commands = start.build_service_commands("py", no_frontend=False, npm="npm")
     names = [c["name"] for c in commands]
     assert names == ["api", "worker-default", "worker-video", "worker-assembly", "frontend"]
 
@@ -35,6 +35,24 @@ def test_build_service_commands_workers():
     assert workers[0]["cmd"][-1] == "default"
     assert workers[1]["cmd"][-1] == "video"
     assert workers[2]["cmd"][-1] == "assembly"
+
+
+def test_npm_cmd_uses_which(monkeypatch):
+    monkeypatch.setattr(
+        start.shutil, "which", lambda name: "C:/node/npm.cmd" if name == "npm" else None
+    )
+    assert start.npm_cmd() == "C:/node/npm.cmd"
+
+
+def test_build_service_commands_frontend_uses_npm():
+    commands = start.build_service_commands("py", no_frontend=False, npm="npm.cmd")
+    frontend = [c for c in commands if c["name"] == "frontend"][0]
+    assert frontend["cmd"][0] == "npm.cmd"
+
+
+def test_build_service_commands_skips_frontend_without_npm():
+    commands = start.build_service_commands("py", no_frontend=False, npm=None)
+    assert "frontend" not in [c["name"] for c in commands]
 
 
 def test_service_log_path():

@@ -69,7 +69,16 @@ def venv_python() -> str:
     return str(BACKEND / ".venv" / "bin" / "python")
 
 
-def build_service_commands(python: str, no_frontend: bool) -> list[dict]:
+def npm_cmd() -> str | None:
+    resolved = shutil.which("npm")
+    if resolved is None:
+        return None
+    return resolved
+
+
+def build_service_commands(
+    python: str, no_frontend: bool, npm: str | None = None
+) -> list[dict]:
     commands = [
         {
             "name": "api",
@@ -85,8 +94,8 @@ def build_service_commands(python: str, no_frontend: bool) -> list[dict]:
                 "cwd": BACKEND,
             }
         )
-    if not no_frontend:
-        commands.append({"name": "frontend", "cmd": ["npm", "run", "dev"], "cwd": FRONTEND})
+    if not no_frontend and npm:
+        commands.append({"name": "frontend", "cmd": [npm, "run", "dev"], "cwd": FRONTEND})
     return commands
 
 
@@ -116,6 +125,10 @@ def ensure_backend_venv(skip_install: bool = False) -> str:
 
 
 def ensure_frontend_deps(skip_install: bool = False) -> None:
+    npm = npm_cmd()
+    if npm is None:
+        logger.warning("npm no esta en PATH; se omite el frontend")
+        return
     if not (FRONTEND / "package.json").exists():
         return
     marker = FRONTEND / "node_modules" / ".package-lock.json"
@@ -127,7 +140,7 @@ def ensure_frontend_deps(skip_install: bool = False) -> None:
         needs_install = not skip_install
     if needs_install:
         logger.info("Instalando dependencias del frontend...")
-        subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=FRONTEND, check=True)
+        subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=FRONTEND, check=True)
 
 
 def _docker_run(docker: str, args: list[str], timeout: int = 60) -> tuple[bool, str]:
@@ -281,7 +294,10 @@ def main(argv: list[str] | None = None) -> int:
     ensure_frontend_deps(skip_install=args.skip_install)
     ensure_redis(args.redis_url)
 
-    commands = build_service_commands(python, no_frontend=args.no_frontend)
+    npm = npm_cmd() if not args.no_frontend else None
+    if not args.no_frontend and npm is None:
+        logger.warning("npm no esta en PATH; se arrancara sin frontend")
+    commands = build_service_commands(python, no_frontend=args.no_frontend, npm=npm)
     return run_services(commands, no_frontend=args.no_frontend)
 
 
