@@ -2,8 +2,10 @@ from app.schemas.job import JobRead
 from app.schemas.project import (
     DialogueLineRead,
     DialogueLineWrite,
+    EpisodeCreate,
     EpisodeRead,
     EpisodeUpdate,
+    FragmentCreate,
     FragmentRead,
     FragmentUpdate,
     ProjectCreate,
@@ -34,8 +36,10 @@ from app.schemas.script import (
 __all__ = [
     "DialogueLineRead",
     "DialogueLineWrite",
+    "EpisodeCreate",
     "EpisodeRead",
     "EpisodeUpdate",
+    "FragmentCreate",
     "FragmentRead",
     "FragmentUpdate",
     "JobRead",

@@ -39,6 +39,27 @@ class EpisodeUpdate(BaseModel):
     status: str | None = None
 
 
+class DialogueLineWrite(BaseModel):
+    id: int | None = None
+    character_variant_id: int | None = None
+    text: str
+    order: int = 0
+
+
+class EpisodeCreate(BaseModel):
+    number: int
+    title: str = ""
+
+
+class FragmentCreate(BaseModel):
+    shot_number: int
+    time_place: str = ""
+    cast: list = Field(default_factory=list)
+    prompt_video: str = ""
+    duration: int = 10
+    dialogues: list[DialogueLineWrite] = Field(default_factory=list)
+
+
 class DialogueLineRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,13 +93,7 @@ class FragmentUpdate(BaseModel):
     duration: int | None = None
     status: str | None = None
     video_path: str | None = None
-
-
-class DialogueLineWrite(BaseModel):
-    id: int | None = None
-    character_variant_id: int | None = None
-    text: str
-    order: int = 0
+    dialogues: list[DialogueLineWrite] | None = None
 
 
 class EpisodeRead(BaseModel):
