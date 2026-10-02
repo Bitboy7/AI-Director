@@ -59,6 +59,37 @@ async def delete_project(project_id: int, session: SessionDep):
     await session.commit()
 
 
+@router.put("/projects/{project_id}/phases/{phase}", response_model=ProjectRead)
+async def update_phase(
+    project_id: int,
+    phase: int,
+    session: SessionDep,
+    payload: dict = Body(default={}),
+):
+    if phase not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="fase inválida (1-3)")
+    project = await get_project_or_404(session, project_id)
+    settings = dict(project.settings or {})
+    completed = set(settings.get("completed_phases", []))
+    if payload.get("completed"):
+        if phase > 1 and (phase - 1) not in completed:
+            raise HTTPException(
+                status_code=400, detail="completa primero la fase anterior"
+            )
+        completed.add(phase)
+    else:
+        if any(p > phase for p in completed):
+            raise HTTPException(
+                status_code=400, detail="reabre primero las fases posteriores"
+            )
+        completed.discard(phase)
+    settings["completed_phases"] = sorted(completed)
+    project.settings = settings
+    project.updated_at = datetime.now()
+    await session.commit()
+    return project
+
+
 @router.post(
     "/projects/{project_id}/generate-script", response_model=JobRead, status_code=202
 )
