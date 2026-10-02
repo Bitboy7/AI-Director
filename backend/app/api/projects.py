@@ -4,8 +4,9 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import SessionDep
-from app.models import Project
-from app.schemas import ProjectCreate, ProjectRead, ProjectUpdate
+from app.jobs import queue as queue_module
+from app.models import Job, JobStatus, JobType, Project
+from app.schemas import JobRead, ProjectCreate, ProjectRead, ProjectUpdate, ScriptGenerationRequest
 
 router = APIRouter(prefix="/api/v1")
 
@@ -56,3 +57,29 @@ async def delete_project(project_id: int, session: SessionDep):
     project = await get_project_or_404(session, project_id)
     await session.delete(project)
     await session.commit()
+
+
+@router.post(
+    "/projects/{project_id}/generate-script", response_model=JobRead, status_code=202
+)
+async def generate_script(
+    project_id: int, payload: ScriptGenerationRequest, session: SessionDep
+):
+    project = await get_project_or_404(session, project_id)
+    job = Job(
+        type=JobType.script_gen,
+        status=JobStatus.queued,
+        payload={"project_id": project_id, "request": payload.model_dump()},
+        project_id=project_id,
+    )
+    session.add(job)
+    await session.commit()
+    try:
+        await queue_module.enqueue("default", "run_script_gen", job.id)
+    except queue_module.QueueUnavailableError as exc:
+        job.status = JobStatus.failed
+        job.error = "queue_unavailable"
+        job.updated_at = datetime.now()
+        await session.commit()
+        raise HTTPException(status_code=503, detail="queue_unavailable") from exc
+    return job

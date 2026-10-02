@@ -17,11 +17,23 @@ def register_provider(kind: str, name: str, factory: Callable[[], Any]) -> None:
     _REGISTRY[(kind, name)] = factory
 
 
+def _ensure_loaded(kind: str) -> None:
+    import importlib
+
+    try:
+        importlib.import_module(f"app.providers.{kind}")
+    except ModuleNotFoundError:
+        pass
+
+
 def get_provider(kind: str, name: str | None = None) -> Any:
     resolved = name or _DEFAULT_PROVIDERS.get(kind)
     if resolved is None:
         raise ProviderUnavailableError(f"no default provider for kind '{kind}'")
     factory = _REGISTRY.get((kind, resolved))
+    if factory is None:
+        _ensure_loaded(kind)
+        factory = _REGISTRY.get((kind, resolved))
     if factory is None:
         raise ProviderUnavailableError(f"provider '{kind}/{resolved}' not registered")
     return factory()
