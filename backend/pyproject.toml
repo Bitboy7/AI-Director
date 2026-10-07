@@ -17,6 +17,7 @@ dependencies = [
     "arq",
     "redis",
     "httpx",
+    "psutil",
     "edge-tts",
     "python-multipart",
 ]

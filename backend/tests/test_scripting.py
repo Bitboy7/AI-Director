@@ -7,6 +7,8 @@ from app.providers.llm.ollama import OllamaLLM
 from app.schemas.script import ScriptGenerationRequest
 from app.services.scripting import (
     ScriptValidationError,
+    build_system_prompt,
+    build_user_prompt,
     generate_script_draft,
     parse_script_json,
 )
@@ -38,9 +40,11 @@ class FakeProvider:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = 0
+        self.prompts = []
 
     async def complete(self, system, user, json_mode=False):
         self.calls += 1
+        self.prompts.append(user)
         return self.responses.pop(0)
 
 
@@ -63,6 +67,53 @@ async def test_generate_script_draft_exhausts_retries():
     with pytest.raises(ScriptValidationError):
         await generate_script_draft(provider, req, retries=1)
     assert provider.calls == 2
+
+
+def test_parse_script_json_empty_raises_clear_error():
+    with pytest.raises(ScriptValidationError) as exc_info:
+        parse_script_json("   ")
+    assert "vacía" in str(exc_info.value)
+
+
+def test_build_user_prompt_injects_professional_style_prompt():
+    req = ScriptGenerationRequest(synopsis="historia", video_style="anime")
+    prompt = build_user_prompt(req)
+    assert "anime style" in prompt
+    assert "Estilo visual: anime style" in prompt
+
+
+def test_build_user_prompt_keeps_free_text_style():
+    req = ScriptGenerationRequest(synopsis="historia", video_style="mi estilo")
+    assert "Estilo visual: mi estilo" in build_user_prompt(req)
+
+
+def test_system_prompt_forbids_mixing_languages():
+    prompt = build_system_prompt()
+    assert "nunca mezcles" in prompt.lower()
+    assert "único idioma" in prompt.lower()
+
+
+def test_user_prompt_includes_language():
+    req = ScriptGenerationRequest(synopsis="x", language="es-MX")
+    assert "Idioma: es-MX" in build_user_prompt(req)
+
+
+async def test_generate_script_retries_with_original_prompt_on_empty_response():
+    provider = FakeProvider(["", json.dumps(VALID_DRAFT)])
+    req = ScriptGenerationRequest(synopsis="historia")
+
+    draft = await generate_script_draft(provider, req, retries=2)
+
+    assert draft.synopsis == "x"
+    assert provider.prompts[0] == build_user_prompt(req)
+    assert provider.prompts[1] == build_user_prompt(req)
+
+
+async def test_generate_script_empty_response_exhausts_retries():
+    provider = FakeProvider(["", ""])
+    req = ScriptGenerationRequest(synopsis="historia")
+    with pytest.raises(ScriptValidationError):
+        await generate_script_draft(provider, req, retries=1)
 
 
 async def test_ollama_payload():

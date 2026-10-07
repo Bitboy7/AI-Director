@@ -3,6 +3,7 @@ import type {
   Fragment,
   Job,
   Project,
+  ReferenceImage,
   Resource,
   ResourceType,
 } from '@/types'
@@ -48,6 +49,99 @@ export async function getProject(id: number): Promise<Project> {
   return request(`/projects/${id}`)
 }
 
+export async function updateProject(id: number, patch: Partial<Project>): Promise<Project> {
+  return request(`/projects/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export interface ProviderOption {
+  name: string
+  configured: boolean
+}
+
+export interface ProviderCatalog {
+  llm: ProviderOption[]
+  image: ProviderOption[]
+  video: ProviderOption[]
+  tts: ProviderOption[]
+}
+
+export interface ModelPricing {
+  unit: 'second' | 'image' | '1m_tokens' | string
+  usd?: number
+  input?: number
+  output?: number
+}
+
+export interface ProviderModel {
+  id: string
+  name: string
+  description: string
+  pricing?: ModelPricing | null
+}
+
+export interface StyleOption {
+  id: string
+  label: string
+}
+
+export const DEFAULT_STYLE_ID = 'anime'
+
+export async function getStyles(): Promise<StyleOption[]> {
+  const data = await request<{ styles: StyleOption[] }>('/styles')
+  return data.styles
+}
+
+export async function getProviders(): Promise<ProviderCatalog> {
+  const data = await request<{ providers: ProviderCatalog }>('/providers')
+  return data.providers
+}
+
+export async function getProviderModels(
+  kind: 'llm' | 'image' | 'video' | 'tts',
+  provider: string,
+): Promise<ProviderModel[]> {
+  const data = await request<{ models: ProviderModel[] }>(
+    `/providers/${kind}/${provider}/models`,
+  )
+  return data.models
+}
+
+export interface ResolutionOption {
+  label: string
+  value?: string
+}
+
+export async function getResolutions(
+  kind: 'llm' | 'image' | 'video' | 'tts',
+  provider: string,
+  params: { model?: string; aspect?: string } = {},
+): Promise<ResolutionOption[]> {
+  const search = new URLSearchParams()
+  if (params.aspect) search.set('aspect', params.aspect)
+  if (params.model) search.set('model', params.model)
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  const data = await request<{ resolutions: ResolutionOption[] }>(
+    `/providers/${kind}/${provider}/resolutions${suffix}`,
+  )
+  return data.resolutions
+}
+
+export interface VoiceOption {
+  short_name: string
+  locale: string
+  gender: string
+  friendly_name: string
+}
+
+export async function getVoices(locale?: string): Promise<VoiceOption[]> {
+  const suffix = locale ? `?locale=${encodeURIComponent(locale)}` : ''
+  const data = await request<{ voices: VoiceOption[] }>(`/voices${suffix}`)
+  return data.voices
+}
+
 export async function deleteProject(id: number): Promise<void> {
   return request(`/projects/${id}`, { method: 'DELETE' })
 }
@@ -69,6 +163,49 @@ export async function generateScript(
   })
 }
 
+export interface ScriptResource {
+  name: string
+  description: string
+  tags: string[]
+}
+
+export interface ScriptDialogue {
+  character: string
+  text: string
+}
+
+export interface ScriptShot {
+  shot_number: number
+  time_place: string
+  cast: string[]
+  action: string
+  dialogues: ScriptDialogue[]
+}
+
+export interface ScriptEpisodeDraft {
+  number: number
+  title: string
+  shots: ScriptShot[]
+}
+
+export interface ScriptDraft {
+  synopsis: string
+  characters: ScriptResource[]
+  scenes: ScriptResource[]
+  props: ScriptResource[]
+  episodes: ScriptEpisodeDraft[]
+}
+
+export async function getScriptDraft(
+  projectId: number,
+): Promise<{ draft: ScriptDraft | null; confirmed: boolean }> {
+  return request(`/projects/${projectId}/script-draft`)
+}
+
+export async function confirmScript(projectId: number): Promise<Project> {
+  return request(`/projects/${projectId}/confirm-script`, { method: 'POST' })
+}
+
 export async function generateResources(projectId: number): Promise<Job> {
   return request(`/projects/${projectId}/generate-resources`, {
     method: 'POST',
@@ -82,6 +219,26 @@ export async function listEpisodes(projectId: number): Promise<Episode[]> {
 
 export async function listFragments(episodeId: number): Promise<Fragment[]> {
   return request(`/episodes/${episodeId}/fragments`)
+}
+
+export async function createFragment(
+  episodeId: number,
+  payload: {
+    shot_number: number
+    time_place?: string
+    prompt_video?: string
+    duration?: number
+    cast?: unknown[]
+  },
+): Promise<Fragment> {
+  return request(`/episodes/${episodeId}/fragments`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteFragment(fragmentId: number): Promise<void> {
+  return request(`/fragments/${fragmentId}`, { method: 'DELETE' })
 }
 
 export async function updateFragment(
@@ -124,6 +281,26 @@ export async function createVariant(
   })
 }
 
+export async function updateResource(
+  id: number,
+  patch: { name?: string; profile?: Record<string, unknown>; type?: ResourceType },
+): Promise<Resource> {
+  return request(`/resources/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function updateVariant(
+  id: number,
+  patch: { name?: string; description?: string; voice?: Record<string, unknown> },
+): Promise<Resource['variants'][number]> {
+  return request(`/variants/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
 export async function uploadReferenceImage(
   variantId: number,
   file: File,
@@ -136,6 +313,26 @@ export async function uploadReferenceImage(
   })
   if (!response.ok) throw new Error('falló la subida de imagen')
   return response.json()
+}
+
+export async function generateReferenceImage(
+  variantId: number,
+  payload: { prompt?: string; count?: number; style?: string; model?: string },
+): Promise<ReferenceImage[]> {
+  return request(`/variants/${variantId}/images/generate`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function generateResourceImages(
+  projectId: number,
+  payload: { resource_ids: number[]; provider?: string; model?: string },
+): Promise<Job> {
+  return request(`/projects/${projectId}/resources/generate-images`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function generateEpisode(
@@ -152,8 +349,114 @@ export async function generateFragment(fragmentId: number): Promise<Job> {
   return request(`/fragments/${fragmentId}/generate`, { method: 'POST' })
 }
 
+export async function assembleEpisode(
+  episodeId: number,
+  subtitle_burn?: boolean,
+): Promise<Job> {
+  return request(`/episodes/${episodeId}/assemble`, {
+    method: 'POST',
+    body: JSON.stringify({ subtitle_burn }),
+  })
+}
+
+export function exportEpisodeUrl(episodeId: number): string {
+  return `${BASE}/episodes/${episodeId}/final?download=1`
+}
+
+export function episodeFinalUrl(episodeId: number): string {
+  return `${BASE}/episodes/${episodeId}/final`
+}
+
+export function projectCoverUrl(projectId: number): string {
+  return `${BASE}/projects/${projectId}/cover`
+}
+
+export interface CostEstimateEpisode {
+  episode_id: number
+  number: number
+  title: string
+  fragments: number
+  seconds: number
+  cost_usd: number
+}
+
+export interface CostEstimate {
+  episodes: CostEstimateEpisode[]
+  total: { fragments: number; seconds: number; cost_usd: number }
+}
+
+export async function getCostEstimate(projectId: number): Promise<CostEstimate> {
+  return request(`/projects/${projectId}/cost-estimate`)
+}
+
+export async function selectFragmentVideo(
+  fragmentId: number,
+  videoId: number,
+): Promise<import('@/types').Fragment> {
+  return request(`/fragments/${fragmentId}/videos/${videoId}/select`, { method: 'POST' })
+}
+
+export async function generateStoryboards(
+  projectId: number,
+  payload: { episode_ids?: number[] } = {},
+): Promise<Job> {
+  return request(`/projects/${projectId}/storyboards`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateStoryboardPanel(
+  panelId: number,
+  patch: Partial<import('@/types').StoryboardPanel>,
+): Promise<import('@/types').StoryboardPanel> {
+  return request(`/storyboard-panels/${panelId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function createStoryboardPanel(
+  fragmentId: number,
+  payload: { title?: string; start_seconds?: number; end_seconds?: number; prompt?: string },
+): Promise<import('@/types').StoryboardPanel> {
+  return request(`/fragments/${fragmentId}/storyboard-panels`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteStoryboardPanel(panelId: number): Promise<void> {
+  return request(`/storyboard-panels/${panelId}`, { method: 'DELETE' })
+}
+
+export async function generateFragmentReference(
+  fragmentId: number,
+): Promise<import('@/types').FragmentReferenceImage> {
+  return request(`/fragments/${fragmentId}/reference-images/generate`, { method: 'POST' })
+}
+
+export async function uploadFragmentReference(
+  fragmentId: number,
+  file: File,
+): Promise<import('@/types').FragmentReferenceImage> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch(`${BASE}/fragments/${fragmentId}/reference-images`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!response.ok) throw new Error('falló la subida de la imagen de referencia')
+  return response.json()
+}
+
 export async function getJob(jobId: number): Promise<Job> {
   return request(`/jobs/${jobId}`)
+}
+
+export async function listJobs(projectId?: number): Promise<Job[]> {
+  const suffix = projectId != null ? `?project_id=${projectId}` : ''
+  return request(`/jobs${suffix}`)
 }
 
 export async function cancelJob(jobId: number): Promise<Job> {
@@ -205,6 +508,19 @@ export async function deleteCredential(provider: string, key: string): Promise<v
 
 export async function verifyCredential(provider: string): Promise<VerifyResult> {
   return request(`/settings/credentials/${provider}/verify`, { method: 'POST' })
+}
+
+export async function getStats(params: {
+  project_id?: number
+  kind?: string
+  limit?: number
+} = {}): Promise<import('@/types').StatsResponse> {
+  const search = new URLSearchParams()
+  if (params.project_id != null) search.set('project_id', String(params.project_id))
+  if (params.kind) search.set('kind', params.kind)
+  if (params.limit != null) search.set('limit', String(params.limit))
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return request(`/stats${suffix}`)
 }
 
 export async function setPhaseCompleted(

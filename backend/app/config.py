@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     script_gen_retries: int = 3
+    script_gen_budget_seconds: int = 120
+    resource_gen_budget_seconds: int = 60
     max_upload_mb: int = 10
     subtitle_burn_default: bool = False
 

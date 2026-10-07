@@ -1,9 +1,21 @@
+import time
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import SessionDep
 from app.api.projects import get_project_or_404
-from app.models import AssetKind, ImageOrigin, ReferenceImage, Resource, ResourceVariant
+from app.models import (
+    AssetKind,
+    ImageOrigin,
+    Project,
+    ReferenceImage,
+    Resource,
+    ResourceVariant,
+)
+from app.providers import default_provider, get_provider
+from app.providers.base import ProviderAuthError, ProviderError, ProviderRateLimitError
 from app.schemas import (
     ReferenceImageRead,
     ResourceCreate,
@@ -12,7 +24,10 @@ from app.schemas import (
     ResourceVariantRead,
     ResourceVariantUpdate,
 )
-from app.services.storage import save_upload
+from app.services.credentials import get_credentials
+from app.services.storage import save_generated, save_upload
+from app.services.styles import style_prompt
+from app.services.usage import record_api_call
 
 router = APIRouter(prefix="/api/v1")
 
@@ -142,6 +157,75 @@ async def upload_reference_image(
     return image
 
 
-@router.post("/variants/{variant_id}/images/generate", status_code=501)
-async def generate_reference_image(variant_id: int):
-    raise HTTPException(status_code=501, detail="image_provider_not_configured")
+class ImageGenerationRequest(BaseModel):
+    prompt: str | None = None
+    count: int = 1
+    style: str | None = None
+    model: str | None = None
+
+
+@router.post(
+    "/variants/{variant_id}/images/generate", response_model=list[ReferenceImageRead]
+)
+async def generate_reference_image(
+    variant_id: int, payload: ImageGenerationRequest, session: SessionDep
+):
+    variant = await get_variant_or_404(session, variant_id)
+    resource = await session.get(Resource, variant.resource_id)
+    project = await session.get(Project, resource.project_id)
+    provider_name = (project.settings or {}).get("image_provider") or default_provider("image")
+    credentials = await get_credentials(session, provider_name)
+
+    prompt = (payload.prompt or variant.description or "").strip()
+    if not prompt:
+        raise HTTPException(
+            status_code=400, detail="se requiere un prompt o una descripción en la variante"
+        )
+
+    try:
+        provider = get_provider("image", provider_name, credentials=credentials)
+        started = time.monotonic()
+        paths = await provider.generate(
+            prompt,
+            model=payload.model
+            or variant.image_model
+            or (project.settings or {}).get("image_model")
+            or None,
+            style=payload.style
+            or variant.image_style
+            or style_prompt(project.video_style)
+            or None,
+            aspect=project.aspect_ratio or "16:9",
+            count=max(1, payload.count),
+        )
+    except ProviderAuthError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ProviderRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    images: list[ReferenceImage] = []
+    for path in paths:
+        rel = await save_generated(session, project.id, AssetKind.image, path)
+        image = ReferenceImage(
+            variant_id=variant_id, path=rel, origin=ImageOrigin.generated, kind="reference"
+        )
+        session.add(image)
+        images.append(image)
+    record_api_call(
+        session,
+        kind="image",
+        provider=provider_name,
+        model=payload.model
+        or variant.image_model
+        or (project.settings or {}).get("image_model")
+        or "",
+        duration_ms=(time.monotonic() - started) * 1000,
+        project_id=project.id,
+        units=len(paths),
+    )
+    await session.flush()
+    result = [ReferenceImageRead.model_validate(image) for image in images]
+    await session.commit()
+    return result

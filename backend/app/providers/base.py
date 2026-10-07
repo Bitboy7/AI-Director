@@ -30,6 +30,7 @@ class VideoSubmitPayload(BaseModel):
     duration_seconds: int
     aspect_ratio: str = "16:9"
     style: str = ""
+    resolution: str | None = None
     reference_images: list[Path] = Field(default_factory=list)
 
 

@@ -9,14 +9,19 @@ from app.providers.base import VideoProvider, VideoSubmitPayload, VideoTaskStatu
 
 
 class MockVideoProvider(VideoProvider):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        credentials: dict[str, str] | None = None,
+        model: str | None = None,
+    ) -> None:
         self._tasks: dict[str, dict] = {}
         self._tmp = Path(tempfile.mkdtemp(prefix="mock-video-"))
 
-    def _resolution(self, aspect_ratio: str) -> tuple[int, int]:
-        if aspect_ratio == "9:16":
-            return (720, 1280)
-        return (1280, 720)
+    def _resolution(self, aspect_ratio: str, resolution: str | None) -> tuple[int, int]:
+        portrait = aspect_ratio == "9:16"
+        if resolution and resolution.startswith("1080"):
+            return (1080, 1920) if portrait else (1920, 1080)
+        return (720, 1280) if portrait else (1280, 720)
 
     async def submit(self, payload: VideoSubmitPayload) -> str:
         task_id = uuid4().hex
@@ -29,7 +34,7 @@ class MockVideoProvider(VideoProvider):
         self, task_id: str, payload: VideoSubmitPayload, out: Path
     ) -> None:
         self._tasks[task_id]["state"] = "processing"
-        w, h = self._resolution(payload.aspect_ratio)
+        w, h = self._resolution(payload.aspect_ratio, payload.resolution)
         cmd = [
             get_settings().ffmpeg_path,
             "-y",

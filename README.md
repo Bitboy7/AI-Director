@@ -61,18 +61,44 @@ npm run dev     # http://localhost:5173 (proxy /api -> :8000)
 
 ## Pipeline (wizard de 3 pasos)
 
-1. **Esquema del guion** — Ollama genera sinopsis, personajes, escenas, utilería y el guion por episodio con desglose de planos `[N-M]` (tiempo/lugar, cast, diálogos). Regenerable.
-2. **Biblioteca de recursos** — personajes/escenas/utilería con **variantes** (apariencias alternativas), imágenes de referencia (subidas; generación por IA preparada como plug-in) y voz por personaje.
-3. **Videos por episodio** — cada fragmento se genera vía el proveedor de video configurado; al completarse, el ensamblaje une fragmentos + TTS (Edge-TTS) + subtítulos SRT (opcional: quemados) → `final.mp4`.
+1. **Esquema del guion** — el LLM configurado (por defecto Ollama) genera sinopsis, personajes, escenas, utilería y el guion por episodio con desglose de planos `[N-M]` (tiempo/lugar, cast, diálogos). Regenerable.
+2. **Biblioteca de recursos** — personajes/escenas/utilería con **variantes** (apariencias alternativas), imágenes de referencia (subidas o generadas con Nano Banana/Gemini) y voz por personaje.
+3. **Videos por episodio** — cada fragmento se genera vía el proveedor de video configurado (Mock o Gemini Omni); al completarse, el ensamblaje une fragmentos + TTS (Edge-TTS) + subtítulos SRT (opcional: quemados) → `final.mp4`.
+
+El proveedor **y el modelo** se eligen en cada paso desde la propia UI (selector por
+paso) y se guardan en `project.settings` (`llm_provider`/`llm_model`,
+`image_provider`/`image_model`, `video_provider`/`video_model`). Al elegir un
+proveedor, la app descarga dinámicamente sus modelos disponibles
+(`GET /api/v1/providers/{kind}/{provider}/models`): fal (catálogo completo por
+categoría), Gemini (modelos de imagen/video), Ollama (`/api/tags`).
 
 ## Proveedores (plug-ins)
 
 | Dominio | Implementado | Previstos |
 |---|---|---|
-| Guion (LLM) | **Ollama** | Gemini, OpenAI |
-| Imágenes | Subida manual | GPT Image, Seedream, ComfyUI |
-| Video | **Mock** (clips de prueba con ffmpeg) | Seedance 2.0/2.5 (Volcengine Ark), Veo 3 (Vertex), Omni 1.1 |
+| Guion (LLM) | **Ollama**, **Gemini** (`gemini-3.8-flash`), **OpenAI** (`gpt-4o-mini`) | — |
+| Imágenes | **Gemini (Nano Banana)**, **fal.ai** (FLUX, Nano Banana 2, etc.) | GPT Image, Seedream, ComfyUI |
+| Video | **Mock** (clips de prueba con ffmpeg), **Gemini Omni** (`gemini-omni-1.1-flash`), **fal.ai** (Kling, Wan, etc. vía cola) | Seedance 2.0/2.5 (Volcengine Ark), Veo 3 (Vertex) |
 | Voz (TTS) | **Edge-TTS** | OpenAI TTS, ElevenLabs |
+
+En el selector de cada paso **solo se muestran los proveedores con su API configurada**
+(con key en Configuración, variable de entorno, o que no la requieren como Ollama/Edge/Mock).
+
+**Progreso de los trabajos:** los jobs LLM (guion y recursos) reportan un % estimado según el
+consumo de CPU del proceso mientras generan (monitor de recursos, tope 90% hasta completar);
+los jobs de video lo estiman por tiempo transcurrido. El frontend muestra la barra con ese % y
+una nota "Progreso estimado según el uso de recursos del proceso".
+
+**Credenciales de Google (Gemini/Nano Banana/Omni):** una sola API key de
+[Google AI Studio](https://aistudio.google.com/) sirve para imágenes y video. Guárdala en la
+UI de Configuración (provider `gemini` y/o `omni`) o define `GEMINI_API_KEY`/`GOOGLE_API_KEY`
+en `backend/.env`. Nota: las claves nuevas de AI Studio son "auth keys" ligadas a un proyecto
+de Google Cloud y Google rechaza claves sin restricciones.
+
+**Credenciales de fal.ai:** genera una API key en <https://fal.ai/dashboard/keys> y guárdala
+en Configuración (provider `fal`) o define `FAL_API_KEY` en `backend/.env`. El mismo provider
+sirve para imágenes y video; al seleccionarlo en el paso correspondiente se listan sus
+modelos (imagen: categoría `text-to-image`; video: `text-to-video` + `image-to-video`).
 
 Los contratos están en `backend/app/providers/base.py`; registra nuevas implementaciones con `register_provider(kind, name, factory)` en el subpaquete correspondiente (`llm/`, `image/`, `video/`, `tts/`).
 
@@ -89,12 +115,18 @@ Los contratos están en `backend/app/providers/base.py`; registra nuevas impleme
 | `SCRIPT_GEN_RETRIES` | `3` | Reintentos de parseo del JSON del LLM |
 | `MAX_UPLOAD_MB` | `10` | Límite de subida de imágenes |
 | `SUBTITLE_BURN_DEFAULT` | `false` | Quemar subtítulos por defecto |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `OMNI_API_KEY` | — | API key de Google AI Studio (Gemini/Nano Banana/Omni); alternativa a la UI de Configuración |
+| `GEMINI_ENDPOINT` | `https://generativelanguage.googleapis.com` | Endpoint de la Gemini API |
+| `FAL_API_KEY` / `FAL_KEY` | — | API key de fal.ai (imágenes y video); alternativa a la UI de Configuración |
+| `OPENAI_API_KEY` | — | API key de OpenAI (guiones); alternativa a la UI de Configuración |
+| `SCRIPT_GEN_BUDGET_SECONDS` | `120` | Presupuesto para el % de progreso del guion (por uso de CPU) |
+| `RESOURCE_GEN_BUDGET_SECONDS` | `60` | Presupuesto para el % de progreso de recursos |
 
 ## Tests
 
 ```powershell
 cd backend
-.\.venv\Scripts\python -m pytest        # 35 tests (unitarios + E2E del pipeline)
+.\.venv\Scripts\python -m pytest        # tests unitarios + E2E del pipeline
 
 cd frontend
 npm test                                # vitest

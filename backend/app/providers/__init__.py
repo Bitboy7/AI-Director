@@ -7,7 +7,7 @@ _REGISTRY: dict[tuple[str, str], Callable[[], Any]] = {}
 
 _DEFAULT_PROVIDERS = {
     "llm": "ollama",
-    "image": "upload",
+    "image": "gemini",
     "video": "mock",
     "tts": "edge",
 }
@@ -15,6 +15,10 @@ _DEFAULT_PROVIDERS = {
 
 def register_provider(kind: str, name: str, factory: Callable[[], Any]) -> None:
     _REGISTRY[(kind, name)] = factory
+
+
+def default_provider(kind: str) -> str | None:
+    return _DEFAULT_PROVIDERS.get(kind)
 
 
 def _ensure_loaded(kind: str) -> None:
@@ -26,7 +30,7 @@ def _ensure_loaded(kind: str) -> None:
         pass
 
 
-def get_provider(kind: str, name: str | None = None) -> Any:
+def get_provider(kind: str, name: str | None = None, **factory_kwargs: Any) -> Any:
     resolved = name or _DEFAULT_PROVIDERS.get(kind)
     if resolved is None:
         raise ProviderUnavailableError(f"no default provider for kind '{kind}'")
@@ -36,8 +40,17 @@ def get_provider(kind: str, name: str | None = None) -> Any:
         factory = _REGISTRY.get((kind, resolved))
     if factory is None:
         raise ProviderUnavailableError(f"provider '{kind}/{resolved}' not registered")
-    return factory()
+    return factory(**factory_kwargs) if factory_kwargs else factory()
 
 
 def list_providers(kind: str) -> list[str]:
     return sorted(name for (k, name) in _REGISTRY if k == kind)
+
+
+_PROVIDER_KINDS = ("llm", "image", "video", "tts")
+
+
+def list_all_providers() -> dict[str, list[str]]:
+    for kind in _PROVIDER_KINDS:
+        _ensure_loaded(kind)
+    return {kind: list_providers(kind) for kind in _PROVIDER_KINDS}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Circle, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Circle, Save, XCircle } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -10,20 +11,20 @@ import {
   type VerifyResult,
 } from '@/lib/api'
 
-const CATALOG = ['seedance', 'veo3', 'omni', 'openai', 'gemini', 'elevenlabs', 'ollama', 'edge']
+const CATALOG = ['seedance', 'veo3', 'omni', 'openai', 'gemini', 'fal', 'elevenlabs', 'ollama', 'edge']
 
 function StatusIcon({ status }: { status: VerifyResult['status'] | undefined }) {
   if (status === 'ok') {
     return (
       <span title="verificado">
-        <CheckCircle2 className="size-4 text-green-500" />
+        <CheckCircle2 className="size-4 text-ok" />
       </span>
     )
   }
   if (status === 'error') {
     return (
       <span title="fallo">
-        <XCircle className="size-4 text-red-500" />
+        <XCircle className="size-4 text-destructive" />
       </span>
     )
   }
@@ -42,6 +43,7 @@ function StatusIcon({ status }: { status: VerifyResult['status'] | undefined }) 
 export default function Settings() {
   const [credentials, setCredentials] = useState<Record<string, Record<string, string>>>({})
   const [statuses, setStatuses] = useState<Record<string, VerifyResult>>({})
+  const navigate = useNavigate()
 
   const refresh = async () => {
     setCredentials(await getCredentials())
@@ -65,13 +67,19 @@ export default function Settings() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl p-6">
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold tracking-tight">Configuración</h2>
-        <p className="text-sm text-muted-foreground">
-          API keys y endpoints de los proveedores de IA. El check verde indica que la
-          credencial está asignada y verificada en funcionamiento.
-        </p>
+    <main className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
+      <div className="mb-8 flex items-start gap-3">
+        <Button variant="ghost" size="icon" onClick={() => navigate(-1)} aria-label="Volver">
+          <ArrowLeft className="size-4" />
+        </Button>
+        <div>
+          <p className="slug mb-2">Configuración</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Configuración</h1>
+          <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+            API keys y endpoints de los proveedores de IA. El check azul indica que la
+            credencial está asignada y verificada en funcionamiento.
+          </p>
+        </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         {CATALOG.map((provider) => (
@@ -114,12 +122,15 @@ function ProviderCard({ provider, values, status, onSave }: CardProps) {
   const hasStored = Object.values(values).some((value) => value.trim() !== '')
 
   return (
-    <Card>
+    <Card className="group transition-colors hover:border-border/60">
       <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>{provider}</span>
-          <StatusIcon status={status?.status} />
+        <CardTitle>
+          <span className="slug mb-1 block text-[0.625rem]">Proveedor</span>
+          <span className="font-mono text-sm font-medium tracking-tight">{provider}</span>
         </CardTitle>
+        <div data-slot="card-action">
+          <StatusIcon status={status?.status} />
+        </div>
       </CardHeader>
       <CardContent className="space-y-2">
         <Input
@@ -137,6 +148,7 @@ function ProviderCard({ provider, values, status, onSave }: CardProps) {
         />
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={save}>
+            <Save />
             Guardar
           </Button>
           {hasStored && (
@@ -146,7 +158,7 @@ function ProviderCard({ provider, values, status, onSave }: CardProps) {
           )}
         </div>
         {status?.detail && status.status === 'ok' && (
-          <p className="text-xs text-green-600">{status.detail}</p>
+          <p className="text-xs text-ok">{status.detail}</p>
         )}
         {status?.detail && status.status !== 'ok' && (
           <p className="text-xs text-muted-foreground">{status.detail}</p>

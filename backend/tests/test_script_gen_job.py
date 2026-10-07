@@ -63,6 +63,22 @@ async def test_generate_script_job_end_to_end(client, db_session, fake_redis, mo
     assert job.status == JobStatus.succeeded
     assert job.result["fragments"] == 9
 
+    # El guion queda como borrador pendiente de confirmar: sin episodios ni recursos.
+    r = await client.get(f"/api/v1/projects/{pid}/script-draft")
+    assert r.status_code == 200
+    assert r.json()["draft"] is not None
+    assert r.json()["confirmed"] is False
+    r = await client.get(f"/api/v1/projects/{pid}/episodes")
+    assert r.json() == []
+    r = await client.get(f"/api/v1/projects/{pid}/resources")
+    assert r.json() == []
+
+    # Confirmar materializa recursos (sin variantes) + episodios/fragmentos/diálogos.
+    r = await client.post(f"/api/v1/projects/{pid}/confirm-script")
+    assert r.status_code == 200
+    assert r.json()["settings"]["script_confirmed"] is True
+    assert 1 in r.json()["settings"]["completed_phases"]
+
     r = await client.get(f"/api/v1/projects/{pid}/episodes")
     episodes = r.json()
     assert len(episodes) == 1
@@ -73,7 +89,7 @@ async def test_generate_script_job_end_to_end(client, db_session, fake_redis, mo
     resources = r.json()
     assert len(resources) == 2
     kai = next(res for res in resources if res["name"] == "Kai")
-    assert kai["variants"][0]["name"] == "Base Appearance"
+    assert kai["variants"] == []
 
 
 async def test_generate_script_job_invalid_json_fails(

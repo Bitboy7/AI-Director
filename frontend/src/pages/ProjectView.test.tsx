@@ -1,8 +1,9 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, expect, test, vi } from 'vitest'
 import ProjectView from './ProjectView'
-import { getProject, listEpisodes, listResources } from '@/lib/api'
+import { getProject, getProviderModels, getProviders, getResolutions, getScriptDraft, listEpisodes, listResources, updateProject } from '@/lib/api'
 import type { Project } from '@/types'
 
 vi.mock('@/lib/api', () => ({
@@ -16,6 +17,20 @@ vi.mock('@/lib/api', () => ({
   generateFragment: vi.fn(),
   getJob: vi.fn(),
   cancelJob: vi.fn(),
+  getProviders: vi.fn(),
+  getProviderModels: vi.fn(),
+  getResolutions: vi.fn(),
+  getStyles: vi.fn().mockResolvedValue([]),
+  getVoices: vi.fn().mockResolvedValue([]),
+  getScriptDraft: vi.fn(),
+  confirmScript: vi.fn(),
+  DEFAULT_STYLE_ID: 'anime',
+  updateProject: vi.fn(),
+  createResource: vi.fn(),
+  createVariant: vi.fn(),
+  generateReferenceImage: vi.fn(),
+  uploadReferenceImage: vi.fn(),
+  assetUrl: vi.fn(),
 }))
 
 const project = (completedPhases: number[]): Project => ({
@@ -34,6 +49,16 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listEpisodes).mockResolvedValue([])
   vi.mocked(listResources).mockResolvedValue([])
+  vi.mocked(getScriptDraft).mockResolvedValue({ draft: null, confirmed: false })
+  vi.mocked(getProviders).mockResolvedValue({
+    llm: [{ name: 'ollama', configured: true }],
+    image: [{ name: 'gemini', configured: true }],
+    video: [{ name: 'mock', configured: true }],
+    tts: [{ name: 'edge', configured: true }],
+  })
+  vi.mocked(updateProject).mockResolvedValue(project([]))
+  vi.mocked(getProviderModels).mockResolvedValue([])
+  vi.mocked(getResolutions).mockResolvedValue([])
 })
 
 function renderView(project: Project) {
@@ -66,4 +91,13 @@ test('shows complete phase button and marks phase completed', async () => {
   renderView(project([]))
   const button = await screen.findByRole('button', { name: /Marcar fase 1 como completada/ })
   expect(button).toBeInTheDocument()
+})
+
+test('can navigate back to the script tab after phase 1 is completed', async () => {
+  const user = userEvent.setup()
+  renderView(project([1]))
+
+  await user.click(await screen.findByRole('tab', { name: /Esquema del guion/ }))
+
+  expect(await screen.findByText('Generar guion con IA')).toBeInTheDocument()
 })

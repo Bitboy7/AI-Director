@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -69,3 +70,21 @@ def resolve_asset(relative_path: str) -> Path | None:
     ):
         return None
     return candidate
+
+
+async def save_generated(
+    session: AsyncSession,
+    project_id: int,
+    kind: AssetKind,
+    source: Path,
+    suffix: str = ".png",
+) -> str:
+    settings = get_settings()
+    dest_dir = asset_dir(project_id, kind)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{uuid4().hex}{suffix}"
+    shutil.copyfile(source, dest)
+    rel = dest.relative_to(settings.storage_dir.resolve()).as_posix()
+    asset = Asset(project_id=project_id, kind=kind, path=rel)
+    session.add(asset)
+    return rel

@@ -1,7 +1,7 @@
 from sqlalchemy import select
 
 from app.jobs import queue as queue_module
-from app.models import Job, JobStatus, JobType
+from app.models import Fragment, Job, JobStatus, JobType
 
 
 async def _setup_episode_with_fragments(client, n=3):
@@ -16,6 +16,52 @@ async def _setup_episode_with_fragments(client, n=3):
         )
         assert r.status_code == 200
     return pid, eid
+
+
+async def _mark_fragments_generated(db_session, episode_id):
+    fragments = (
+        await db_session.execute(
+            select(Fragment).where(Fragment.episode_id == episode_id)
+        )
+    ).scalars().all()
+    for fragment in fragments:
+        fragment.video_path = f"1/videos/{fragment.id}.mp4"
+        fragment.status = "generated"
+    await db_session.commit()
+
+
+async def test_assemble_endpoint_creates_only_assembly_job(
+    client, db_session, fake_redis, monkeypatch
+):
+    monkeypatch.setattr(queue_module, "get_redis", lambda: fake_redis)
+    _pid, eid = await _setup_episode_with_fragments(client)
+    await _mark_fragments_generated(db_session, eid)
+
+    r = await client.post(f"/api/v1/episodes/{eid}/assemble", json={})
+    assert r.status_code == 202
+    assert r.json()["type"] == "episode_assembly"
+
+    db_session.expire_all()
+    video_jobs = (
+        await db_session.execute(select(Job).where(Job.type == JobType.video_gen))
+    ).scalars().all()
+    assembly_jobs = (
+        await db_session.execute(
+            select(Job).where(Job.type == JobType.episode_assembly)
+        )
+    ).scalars().all()
+    assert video_jobs == []
+    assert len(assembly_jobs) == 1
+
+
+async def test_assemble_endpoint_requires_generated_fragments(
+    client, db_session, fake_redis, monkeypatch
+):
+    monkeypatch.setattr(queue_module, "get_redis", lambda: fake_redis)
+    _pid, eid = await _setup_episode_with_fragments(client)
+
+    r = await client.post(f"/api/v1/episodes/{eid}/assemble", json={})
+    assert r.status_code == 400
 
 
 async def test_episode_generate_creates_jobs(client, db_session, fake_redis, monkeypatch):

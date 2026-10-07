@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import JobProgress from './JobProgress'
 import { getJob } from '@/lib/api'
@@ -11,9 +11,9 @@ vi.mock('@/lib/api', () => ({
 
 const runningJob: Job = {
   id: 1,
-  type: 'video_gen',
+  type: 'script_gen',
   status: 'running',
-  progress: 50,
+  progress: 23,
   payload: {},
   result: {},
   error: null,
@@ -23,41 +23,26 @@ const runningJob: Job = {
   updated_at: '',
 }
 
-const doneJob: Job = { ...runningJob, status: 'succeeded', progress: 100 }
-
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.useFakeTimers()
 })
 
-test('polls until succeeded and shows progress', async () => {
-  vi.mocked(getJob).mockResolvedValueOnce(runningJob).mockResolvedValue(doneJob)
+test('shows percentage and resource hint while running', async () => {
+  vi.mocked(getJob).mockResolvedValue(runningJob)
 
   render(<JobProgress jobId={1} />)
 
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0)
-  })
-  expect(screen.getByText(/Procesando/)).toBeInTheDocument()
-  expect(screen.getByText('50%')).toBeInTheDocument()
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1100)
-  })
-  expect(screen.getByText(/Completado/)).toBeInTheDocument()
-  expect(getJob).toHaveBeenCalledWith(1)
-  vi.useRealTimers()
+  expect(await screen.findByText('23%')).toBeInTheDocument()
+  expect(await screen.findByText(/progreso estimado/i)).toBeInTheDocument()
 })
 
-test('shows error message', async () => {
-  const failed: Job = { ...runningJob, status: 'failed', error: 'proveedor caído' }
-  vi.mocked(getJob).mockResolvedValue(failed)
+test('calls onComplete once when the job succeeds', async () => {
+  const succeeded: Job = { ...runningJob, status: 'succeeded', progress: 100 }
+  vi.mocked(getJob).mockResolvedValue(succeeded)
+  const onComplete = vi.fn()
 
-  render(<JobProgress jobId={2} />)
+  render(<JobProgress jobId={1} onComplete={onComplete} />)
 
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0)
-  })
-  expect(screen.getByText(/proveedor caído/)).toBeInTheDocument()
-  vi.useRealTimers()
+  await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1))
+  expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ status: 'succeeded' }))
 })

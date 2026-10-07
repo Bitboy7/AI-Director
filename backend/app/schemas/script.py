@@ -75,5 +75,16 @@ class ResourcesDraft(BaseModel):
     resources: list[ResourceDraft] = Field(default_factory=list)
 
 
+class StoryboardPanelDraft(BaseModel):
+    title: str = ""
+    start_seconds: int = 0
+    end_seconds: int = 12
+    prompt: str = ""
+
+
+class StoryboardDraft(BaseModel):
+    panels: list[StoryboardPanelDraft] = Field(default_factory=list)
+
+
 def planned_fragments(duration_seconds: int, fragment_seconds: int = 10) -> int:
     return math.ceil(duration_seconds / fragment_seconds)

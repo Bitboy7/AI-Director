@@ -22,7 +22,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    from app.api import assets, episodes, fragments, jobs, projects, resources, settings
+    from app.api import assets, episodes, fragments, jobs, projects, resources, settings, stats, styles, voices
 
     app.include_router(projects.router)
     app.include_router(episodes.router)
@@ -31,6 +31,9 @@ def create_app() -> FastAPI:
     app.include_router(assets.router)
     app.include_router(jobs.router)
     app.include_router(settings.router)
+    app.include_router(styles.router)
+    app.include_router(stats.router)
+    app.include_router(voices.router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

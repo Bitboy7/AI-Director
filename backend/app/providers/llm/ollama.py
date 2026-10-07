@@ -10,11 +10,13 @@ class OllamaLLM(LLMProvider):
         base_url: str | None = None,
         model: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        credentials: dict[str, str] | None = None,
     ) -> None:
         settings = get_settings()
         self.base_url = (base_url or settings.ollama_url).rstrip("/")
         self.model = model or settings.ollama_model
         self._client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(300.0))
+        self.last_usage: dict[str, int] = {}
 
     async def complete(self, system: str, user: str, json_mode: bool = False) -> str:
         body: dict = {
@@ -32,4 +34,9 @@ class OllamaLLM(LLMProvider):
             body.pop("format", None)
             response = await self._client.post(f"{self.base_url}/api/chat", json=body)
         response.raise_for_status()
-        return response.json()["message"]["content"]
+        data = response.json()
+        self.last_usage = {
+            "input_tokens": int(data.get("prompt_eval_count") or 0),
+            "output_tokens": int(data.get("eval_count") or 0),
+        }
+        return data["message"]["content"]

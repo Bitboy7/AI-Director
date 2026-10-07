@@ -26,6 +26,34 @@ export interface CastEntry {
   variant_id?: number | null
 }
 
+export interface StoryboardPanel {
+  id: number
+  fragment_id: number
+  order: number
+  title: string
+  start_seconds: number
+  end_seconds: number
+  prompt: string
+}
+
+export interface FragmentReferenceImage {
+  id: number
+  fragment_id: number
+  path: string
+  origin: 'uploaded' | 'generated'
+}
+
+export interface FragmentVideo {
+  id: number
+  fragment_id: number
+  path: string
+  provider: string
+  model: string
+  resolution: string | null
+  cost_usd: number
+  created_at: string
+}
+
 export interface Fragment {
   id: number
   episode_id: number
@@ -36,7 +64,14 @@ export interface Fragment {
   duration: number
   status: string
   video_path: string | null
+  video_provider: string | null
+  video_model: string | null
+  resolution: string | null
+  cost_usd: number
   dialogue_lines: DialogueLine[]
+  storyboard: StoryboardPanel[]
+  reference_images: FragmentReferenceImage[]
+  videos: FragmentVideo[]
 }
 
 export interface Episode {
@@ -90,4 +125,34 @@ export interface Job {
   project_id: number | null
   created_at: string
   updated_at: string
+}
+
+export interface ApiCall {
+  id: number
+  project_id: number | null
+  job_id: number | null
+  kind: string
+  provider: string
+  model: string
+  status: string
+  duration_ms: number
+  input_tokens: number
+  output_tokens: number
+  units: number
+  cost_usd: number
+  error: string | null
+  created_at: string
+}
+
+export interface StatsTotals {
+  count: number
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  duration_ms: number
+}
+
+export interface StatsResponse {
+  calls: ApiCall[]
+  totals: StatsTotals
 }

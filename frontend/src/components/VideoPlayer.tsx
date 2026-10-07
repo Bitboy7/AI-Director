@@ -1,12 +1,14 @@
 import { assetUrl } from '@/lib/api'
 
 interface Props {
-  path: string | null
+  path?: string | null
+  src?: string | null
   title?: string
 }
 
-export default function VideoPlayer({ path, title }: Props) {
-  if (!path) {
+export default function VideoPlayer({ path, src, title }: Props) {
+  const source = src ?? (path ? assetUrl(path) : null)
+  if (!source) {
     return (
       <div className="flex aspect-video items-center justify-center rounded-md border bg-muted text-sm text-muted-foreground">
         Sin video
@@ -17,7 +19,7 @@ export default function VideoPlayer({ path, title }: Props) {
     <video
       controls
       className="aspect-video w-full rounded-md border bg-black"
-      src={assetUrl(path)}
+      src={source}
       title={title}
     />
   )

@@ -1,5 +1,3 @@
-from sqlalchemy import select
-
 from app.models import (
     DialogueLine,
     Episode,
@@ -7,17 +5,44 @@ from app.models import (
     Project,
     Resource,
     ResourceType,
-    ResourceVariant,
 )
 from app.schemas.script import ScriptDraft
 
 
-async def apply_script_draft(session, project: Project, draft: ScriptDraft) -> dict:
+def store_script_draft(project: Project, draft: ScriptDraft) -> dict:
+    """Guarda el guion generado como borrador pendiente de confirmar.
+
+    No crea recursos ni episodios: eso ocurre al confirmar el guion.
+    """
+    settings = dict(project.settings or {})
+    settings["script_draft"] = draft.model_dump()
+    settings["script_confirmed"] = False
+    project.settings = settings
     if draft.synopsis:
         project.synopsis = draft.synopsis
     project.status = "scripted"
+    fragments = sum(len(episode.shots) for episode in draft.episodes)
+    resources = len(draft.characters) + len(draft.scenes) + len(draft.props)
+    return {
+        "episodes": len(draft.episodes),
+        "fragments": fragments,
+        "resources": resources,
+        "confirmed": False,
+    }
 
-    variant_by_name: dict[str, int] = {}
+
+async def materialize_script_draft(session, project: Project, draft: ScriptDraft) -> dict:
+    """Crea recursos (nombre+descripción), episodios, fragmentos y diálogos.
+
+    Idempotente: elimina los recursos y episodios existentes del proyecto antes
+    de recrearlos, de modo que reconfirmar un guion regenerado no duplica nada.
+    """
+    for episode in list(project.episodes):
+        await session.delete(episode)
+    for resource in list(project.resources):
+        await session.delete(resource)
+    await session.flush()
+
     resources_created = 0
     draft_resources = [
         (ResourceType.character, draft.characters),
@@ -26,41 +51,15 @@ async def apply_script_draft(session, project: Project, draft: ScriptDraft) -> d
     ]
     for rtype, items in draft_resources:
         for item in items:
-            result = await session.execute(
-                select(Resource).where(
-                    Resource.project_id == project.id,
-                    Resource.type == rtype,
-                    Resource.name == item.name,
-                )
+            resource = Resource(
+                project_id=project.id,
+                type=rtype,
+                name=item.name,
+                profile={"description": item.description, "tags": item.tags},
             )
-            resource = result.scalar_one_or_none()
-            if resource is None:
-                resource = Resource(
-                    project_id=project.id,
-                    type=rtype,
-                    name=item.name,
-                    profile={"description": item.description, "tags": item.tags},
-                )
-                session.add(resource)
-                await session.flush()
-                resources_created += 1
-
-            var_result = await session.execute(
-                select(ResourceVariant.id).where(ResourceVariant.resource_id == resource.id)
-            )
-            has_variants = var_result.first() is not None
-            if not has_variants:
-                variant = ResourceVariant(
-                    resource_id=resource.id,
-                    name="Base Appearance",
-                    description=item.description or resource.name,
-                )
-                session.add(variant)
-                await session.flush()
-                variant_id = variant.id
-            else:
-                variant_id = var_result.first()[0]
-            variant_by_name[item.name] = variant_id
+            session.add(resource)
+            resources_created += 1
+    await session.flush()
 
     fragments_created = 0
     for ep in draft.episodes:
@@ -78,10 +77,7 @@ async def apply_script_draft(session, project: Project, draft: ScriptDraft) -> d
                 episode_id=episode.id,
                 shot_number=shot.shot_number,
                 time_place=shot.time_place,
-                cast=[
-                    {"name": name, "variant_id": variant_by_name.get(name)}
-                    for name in shot.cast
-                ],
+                cast=[{"name": name, "variant_id": None} for name in shot.cast],
                 prompt_video=shot.action,
                 duration=10,
             )
@@ -92,13 +88,20 @@ async def apply_script_draft(session, project: Project, draft: ScriptDraft) -> d
                 session.add(
                     DialogueLine(
                         fragment_id=fragment.id,
-                        character_variant_id=variant_by_name.get(dialogue.character),
+                        character_variant_id=None,
                         text=dialogue.text,
                         order=order,
                     )
                 )
+
+    settings = dict(project.settings or {})
+    settings["script_confirmed"] = True
+    project.settings = settings
+    project.status = "scripted"
+
     return {
         "episodes": len(draft.episodes),
         "fragments": fragments_created,
         "resources": resources_created,
+        "confirmed": True,
     }

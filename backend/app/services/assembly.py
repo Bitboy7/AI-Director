@@ -4,12 +4,8 @@ from pathlib import Path
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import AssetKind, Episode, ResourceVariant
-from app.providers import get_provider
-from app.services.srt import SrtEntry, build_srt
+from app.models import AssetKind, Episode, Project
 from app.services.storage import asset_dir
-
-DEFAULT_VOICE = "es-ES-AlvaroNeural"
 
 
 class AssemblyMissingFragmentsError(Exception):
@@ -48,44 +44,41 @@ async def _run_ffmpeg(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg falló: {stderr.decode(errors='replace')[-500:]}")
 
 
-async def _mix_fragment(video_path: Path, line_audios: list[Path], offsets: list[float], out: Path) -> None:
-    n = len(line_audios)
-    if n == 0:
-        await _run_ffmpeg(["-i", str(video_path), "-c", "copy", str(out)])
-        return
-    inputs: list[str] = ["-i", str(video_path)]
-    for audio in line_audios:
-        inputs += ["-i", str(audio)]
-    parts = []
-    for i, offset in enumerate(offsets, start=1):
-        ms = int(round(offset * 1000))
-        parts.append(f"[{i}:a]adelay={ms}|{ms}[a{i}]")
-    mix_in = "".join(f"[a{i}]" for i in range(1, n + 1))
-    parts.append(f"{mix_in}amix=inputs={n}:duration=longest:normalize=0[aout]")
-    await _run_ffmpeg(
-        [
-            *inputs,
-            "-filter_complex",
-            ";".join(parts),
-            "-map",
-            "0:v",
-            "-map",
-            "[aout]",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-shortest",
-            str(out),
-        ]
+async def _has_audio(path: Path) -> bool:
+    proc = await asyncio.create_subprocess_exec(
+        get_settings().ffprobe_path,
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
+    stdout, _ = await proc.communicate()
+    return bool(stdout.decode().strip())
 
 
-def _escape_filter_path(path: Path) -> str:
-    return str(path.resolve()).replace("\\", "/").replace(":", "\\:")
+def _target_size(aspect_ratio: str) -> tuple[int, int]:
+    if aspect_ratio == "9:16":
+        return 720, 1280
+    if aspect_ratio == "1:1":
+        return 1080, 1080
+    return 1280, 720
 
 
-async def assemble_episode(session, episode_id: int, subtitle_burn: bool) -> dict:
+async def assemble_episode(
+    session, episode_id: int, subtitle_burn: bool = False, on_progress=None
+) -> dict:
+    """Une los fragmentos del episodio en un único video conservando su audio.
+
+    No sintetiza voz ni genera subtítulos: el audio de cada fragmento es el
+    generado por el proveedor de video (se conserva tal cual).
+    """
     settings = get_settings()
     result = await session.execute(select(Episode).where(Episode.id == episode_id))
     episode = result.scalar_one()
@@ -99,83 +92,87 @@ async def assemble_episode(session, episode_id: int, subtitle_burn: bool) -> dic
 
     storage = settings.storage_dir.resolve()
     project_id = episode.project_id
-    audio_dir = asset_dir(project_id, AssetKind.audio)
-    audio_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = Path(settings.storage_dir) / str(project_id) / "work"
-    work_dir.mkdir(parents=True, exist_ok=True)
+    project = await session.get(Project, project_id)
+    aspect = (project.aspect_ratio if project else None) or "16:9"
+    width, height = _target_size(aspect)
+
     out_dir = asset_dir(project_id, AssetKind.episode) / str(episode_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tts_provider = get_provider("tts", None)
-
-    srt_entries: list[SrtEntry] = []
-    processed: list[Path] = []
-    time_cursor = 0.0
+    inputs: list[str] = []
+    filters: list[str] = []
+    concat_labels: list[str] = []
+    input_count = 0
+    total_duration = 0.0
 
     for idx, fragment in enumerate(fragments):
         video_path = storage / fragment.video_path
         duration = await _ffprobe_duration(video_path)
-        line_audios: list[Path] = []
-        offsets: list[float] = []
-        line_offset = 0.5
-        for line in sorted(fragment.dialogue_lines, key=lambda l: l.order):
-            voice_name = DEFAULT_VOICE
-            if line.character_variant_id:
-                variant = await session.get(ResourceVariant, line.character_variant_id)
-                if variant and variant.voice and variant.voice.get("voice"):
-                    voice_name = variant.voice["voice"]
-            tts = await tts_provider.synthesize(line.text, voice_name)
-            line_audios.append(tts.path)
-            offsets.append(line_offset)
-            srt_entries.append(
-                SrtEntry(
-                    start_seconds=time_cursor + line_offset,
-                    end_seconds=time_cursor + line_offset + tts.duration_seconds,
-                    text=line.text,
-                )
-            )
-            line_offset += tts.duration_seconds + 0.3
+        total_duration += duration
+        inputs += ["-i", str(video_path)]
+        video_index = input_count
+        input_count += 1
 
-        processed_path = work_dir / f"{idx:03d}_{fragment.id}.mp4"
-        await _mix_fragment(video_path, line_audios, offsets, processed_path)
-        processed.append(processed_path)
-        time_cursor += duration
+        filters.append(
+            f"[{video_index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v{idx}]"
+        )
 
-    concat_list = work_dir / "concat.txt"
-    concat_list.write_text(
-        "\n".join(f"file '{p.resolve().as_posix()}'" for p in processed),
-        encoding="utf-8",
+        if await _has_audio(video_path):
+            audio_src = f"[{video_index}:a]"
+        else:
+            inputs += [
+                "-t",
+                f"{duration}",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=48000:cl=stereo",
+            ]
+            audio_src = f"[{input_count}:a]"
+            input_count += 1
+        filters.append(
+            f"{audio_src}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{idx}]"
+        )
+        concat_labels.append(f"[v{idx}][a{idx}]")
+
+        if on_progress is not None:
+            await on_progress(min(99, int((idx + 1) / len(fragments) * 100)))
+
+    filters.append(
+        "".join(concat_labels) + f"concat=n={len(fragments)}:v=1:a=1[vout][aout]"
     )
+
     final_path = out_dir / "final.mp4"
     await _run_ffmpeg(
-        ["-f", "concat", "-safe", "0", "-i", str(concat_list), "-c", "copy", str(final_path)]
+        [
+            *inputs,
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            "-t",
+            f"{total_duration:.3f}",
+            str(final_path),
+        ]
     )
 
-    srt_path = out_dir / "final.srt"
-    srt_path.write_text(build_srt(srt_entries), encoding="utf-8")
-
     final_rel = final_path.relative_to(storage).as_posix()
-    srt_rel = srt_path.relative_to(storage).as_posix()
-    result_dict = {"final": final_rel, "srt": srt_rel, "fragments": len(fragments)}
-
-    if subtitle_burn:
-        burned = out_dir / "final_burn.mp4"
-        await _run_ffmpeg(
-            [
-                "-i",
-                str(final_path),
-                "-vf",
-                f"subtitles='{_escape_filter_path(srt_path)}'",
-                "-c:a",
-                "copy",
-                str(burned),
-            ]
-        )
-        result_dict["final_burn"] = burned.relative_to(storage).as_posix()
-
-    for p in processed:
-        p.unlink(missing_ok=True)
-    concat_list.unlink(missing_ok=True)
-
     episode.status = "assembled"
-    return result_dict
+    return {"final": final_rel, "fragments": len(fragments)}

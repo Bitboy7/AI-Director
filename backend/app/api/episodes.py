@@ -9,7 +9,7 @@ from app.api.projects import get_project_or_404
 from app.config import get_settings
 from app.jobs import queue as queue_module
 from app.models import Episode, Job, JobStatus, JobType
-from app.schemas import EpisodeCreate, EpisodeRead, EpisodeUpdate
+from app.schemas import EpisodeCreate, EpisodeRead, EpisodeUpdate, JobRead
 
 router = APIRouter(prefix="/api/v1")
 
@@ -125,6 +125,10 @@ async def generate_episode(
             await queue_module.enqueue(
                 "assembly", "run_episode_assembly", assembly_job.id
             )
+        elif assembly_job.status == JobStatus.queued:
+            await queue_module.enqueue(
+                "assembly", "run_episode_assembly", assembly_job.id
+            )
     except queue_module.QueueUnavailableError as exc:
         for vid in video_job_ids:
             job = await session.get(Job, vid)
@@ -142,11 +146,79 @@ async def generate_episode(
     return {"video_job_ids": video_job_ids, "assembly_job_id": assembly_job.id}
 
 
+@router.post("/episodes/{episode_id}/assemble", response_model=JobRead, status_code=202)
+async def assemble_episode_job(
+    episode_id: int,
+    session: SessionDep,
+    payload: dict = Body(default={}),
+):
+    episode = await get_episode_or_404(session, episode_id)
+    fragments = sorted(episode.fragments, key=lambda f: f.shot_number)
+    if not fragments:
+        raise HTTPException(status_code=400, detail="el episodio no tiene fragmentos")
+    if any(not fragment.video_path for fragment in fragments):
+        raise HTTPException(
+            status_code=400, detail="faltan planos generados para ensamblar"
+        )
+    subtitle_burn = payload.get(
+        "subtitle_burn", get_settings().subtitle_burn_default
+    )
+
+    existing = (
+        await session.execute(
+            select(Job).where(
+                Job.type == JobType.episode_assembly,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        )
+    ).scalars().all()
+    active = next(
+        (j for j in existing if j.payload.get("episode_id") == episode_id), None
+    )
+    if active is not None:
+        if active.status == JobStatus.queued:
+            # Reencola por si el job se perdió de Redis (huérfano). arq deduplica
+            # por _job_id, así que si ya está encolado no se duplica.
+            try:
+                await queue_module.enqueue("assembly", "run_episode_assembly", active.id)
+            except queue_module.QueueUnavailableError as exc:
+                raise HTTPException(status_code=503, detail="queue_unavailable") from exc
+        return active
+
+    job = Job(
+        type=JobType.episode_assembly,
+        status=JobStatus.queued,
+        payload={"episode_id": episode_id, "subtitle_burn": subtitle_burn},
+        project_id=episode.project_id,
+    )
+    session.add(job)
+    await session.flush()
+    try:
+        await queue_module.enqueue("assembly", "run_episode_assembly", job.id)
+    except queue_module.QueueUnavailableError as exc:
+        job.status = JobStatus.failed
+        job.error = "queue_unavailable"
+        job.updated_at = datetime.now()
+        await session.commit()
+        raise HTTPException(status_code=503, detail="queue_unavailable") from exc
+    await session.commit()
+    return job
+
+
 @router.get("/episodes/{episode_id}/final")
-async def get_episode_final(episode_id: int, session: SessionDep):
+async def get_episode_final(
+    episode_id: int, session: SessionDep, download: bool = False
+):
     episode = await get_episode_or_404(session, episode_id)
     storage = get_settings().storage_dir.resolve()
     final = storage / str(episode.project_id) / "episodes" / str(episode_id) / "final.mp4"
     if not final.exists():
         raise HTTPException(status_code=404, detail="episodio aún no ensamblado")
+    if download:
+        return FileResponse(
+            final,
+            media_type="video/mp4",
+            filename=f"capitulo-{episode.number}.mp4",
+            content_disposition_type="attachment",
+        )
     return FileResponse(final)

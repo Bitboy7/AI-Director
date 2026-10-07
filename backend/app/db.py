@@ -35,11 +35,43 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "fragments": {
+        "video_provider": "VARCHAR(50)",
+        "video_model": "VARCHAR(200)",
+        "resolution": "VARCHAR(50)",
+    },
+    "fragment_videos": {
+        "provider": "VARCHAR(50) DEFAULT ''",
+        "model": "VARCHAR(200) DEFAULT ''",
+        "resolution": "VARCHAR(50)",
+        "cost_usd": "FLOAT DEFAULT 0",
+    },
+}
+
+
+async def _ensure_columns(conn) -> None:
+    """Add columns introduced after a database already existed (SQLite only)."""
+    if not str(get_engine().url).startswith("sqlite"):
+        return
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {
+            row[1]
+            for row in (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+        }
+        if not existing:
+            continue
+        for name, ddl in columns.items():
+            if name not in existing:
+                await conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_columns(conn)
 
 
 async def dispose_engine() -> None:

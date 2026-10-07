@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, expect, test, vi } from 'vitest'
 import Settings from './Settings'
 import { getCredentials, verifyCredential } from '@/lib/api'
@@ -49,4 +50,24 @@ test('shows stored api key value', async () => {
   )
 
   expect(await screen.findByDisplayValue('sk-999')).toBeInTheDocument()
+})
+
+test('back button navigates to previous page', async () => {
+  vi.mocked(getCredentials).mockResolvedValue({})
+  vi.mocked(verifyCredential).mockResolvedValue({ status: 'unavailable', detail: '' })
+  const user = userEvent.setup()
+
+  render(
+    <MemoryRouter initialEntries={['/dashboard', '/settings']}>
+      <Routes>
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/dashboard" element={<div>Dashboard</div>} />
+      </Routes>
+    </MemoryRouter>,
+  )
+
+  const back = await screen.findByRole('button', { name: /Volver|Atrás/i })
+  await user.click(back)
+
+  expect(await screen.findByText('Dashboard')).toBeInTheDocument()
 })

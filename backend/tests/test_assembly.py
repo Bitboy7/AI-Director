@@ -10,7 +10,11 @@ from app.jobs.state import mark_cancelled
 from app.jobs.tasks import run_video_gen
 from app.models import DialogueLine, Episode, Fragment, Job, JobStatus, JobType, Project
 from app.providers.base import TTSResult, VideoTaskStatus
-from app.services.assembly import AssemblyMissingFragmentsError, assemble_episode
+from app.services.assembly import (
+    AssemblyMissingFragmentsError,
+    _ffprobe_duration,
+    assemble_episode,
+)
 from app.services.srt import SrtEntry, build_srt
 
 
@@ -64,6 +68,27 @@ class FakeTTS:
         return TTSResult(path=self.wav, duration_seconds=1.0)
 
 
+def _probe_audio(path: Path) -> str:
+    proc = subprocess.run(
+        [
+            get_settings().ffprobe_path,
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout
+
+
 async def _setup_episode(db_session, tmp_path, with_videos=True):
     p = Project(name="P", synopsis="s", video_style="cyberpunk")
     db_session.add(p)
@@ -104,27 +129,59 @@ def test_build_srt_format():
 
 
 async def test_assemble_two_fragments(db_session, tmp_path, monkeypatch):
-    wav = _make_wav_1s(tmp_path)
-    pid, eid = await _setup_episode(db_session, tmp_path)
-
-    from app.services import assembly
-
-    monkeypatch.setattr(assembly, "get_provider", lambda kind, name=None: FakeTTS(wav))
+    _pid, eid = await _setup_episode(db_session, tmp_path)
 
     result = await assemble_episode(db_session, eid, subtitle_burn=False)
     await db_session.commit()
 
     storage = get_settings().storage_dir
     final = storage / result["final"]
-    srt = storage / result["srt"]
     assert final.exists() and final.stat().st_size > 1000
-    assert srt.exists()
-    content = srt.read_text(encoding="utf-8")
-    assert content.count("-->") == 2
+
+    # El video final conserva la duración de los fragmentos (2×3s).
+    duration = await _ffprobe_duration(final)
+    assert duration == pytest.approx(6.0, abs=0.6)
 
     db_session.expire_all()
     ep = await db_session.get(Episode, eid)
     assert ep.status == "assembled"
+
+
+async def test_assemble_reports_progress(db_session, tmp_path, monkeypatch):
+    _pid, eid = await _setup_episode(db_session, tmp_path)
+
+    values: list[int] = []
+
+    async def on_progress(value: int) -> None:
+        values.append(value)
+
+    await assemble_episode(db_session, eid, subtitle_burn=False, on_progress=on_progress)
+    await db_session.commit()
+
+    assert values == [50, 99]
+
+
+async def test_assemble_mixed_dialogue_keeps_audio(db_session, tmp_path, monkeypatch):
+    _pid, eid = await _setup_episode(db_session, tmp_path)
+
+    # Deja el fragmento 2 sin diálogo; el ensamblaje ya no sintetiza voz, así
+    # que solo debe concatenar conservando/normalizando el audio.
+    result = await db_session.execute(
+        select(DialogueLine).join(Fragment).where(
+            Fragment.episode_id == eid, Fragment.shot_number == 2
+        )
+    )
+    for line in result.scalars().all():
+        await db_session.delete(line)
+    await db_session.commit()
+
+    res = await assemble_episode(db_session, eid, subtitle_burn=False)
+    await db_session.commit()
+
+    final = get_settings().storage_dir / res["final"]
+    output = _probe_audio(final)
+    assert "aac" in output
+    assert "48000" in output
 
 
 async def test_assemble_missing_fragment_raises(db_session, tmp_path):
@@ -173,7 +230,7 @@ async def test_video_job_marks_failed_on_provider_error(
     from app.jobs import tasks
 
     monkeypatch.setattr(
-        tasks, "get_provider", lambda kind, name=None: FailingDownloadProvider()
+        tasks, "get_provider", lambda kind, name=None, **kwargs: FailingDownloadProvider()
     )
 
     await run_video_gen({"redis": fake_redis}, job_id)
@@ -199,7 +256,7 @@ async def test_video_job_cancel_stops_polling(db_session, tmp_path, monkeypatch,
     from app.jobs import tasks
 
     monkeypatch.setattr(
-        tasks, "get_provider", lambda kind, name=None: SlowVideoProvider()
+        tasks, "get_provider", lambda kind, name=None, **kwargs: SlowVideoProvider()
     )
 
     task = asyncio.create_task(run_video_gen({"redis": fake_redis}, job_id))

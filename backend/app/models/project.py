@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -52,11 +52,33 @@ class Fragment(TimestampMixin, Base):
     duration: Mapped[int] = mapped_column(Integer, default=10)
     status: Mapped[str] = mapped_column(String(30), default="pending")
     video_path: Mapped[str | None] = mapped_column(String(500), default=None)
+    video_provider: Mapped[str | None] = mapped_column(String(50), default=None)
+    video_model: Mapped[str | None] = mapped_column(String(200), default=None)
+    resolution: Mapped[str | None] = mapped_column(String(50), default=None)
 
     episode: Mapped[Episode] = relationship(back_populates="fragments")
     dialogue_lines: Mapped[list["DialogueLine"]] = relationship(
         back_populates="fragment", cascade="all, delete-orphan", lazy="selectin"
     )
+    storyboard: Mapped[list["StoryboardPanel"]] = relationship(
+        back_populates="fragment",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="StoryboardPanel.order",
+    )
+    reference_images: Mapped[list["FragmentReferenceImage"]] = relationship(
+        back_populates="fragment", cascade="all, delete-orphan", lazy="selectin"
+    )
+    videos: Mapped[list["FragmentVideo"]] = relationship(
+        back_populates="fragment",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="FragmentVideo.id.desc()",
+    )
+
+    @property
+    def cost_usd(self) -> float:
+        return round(sum(video.cost_usd or 0.0 for video in self.videos), 6)
 
 
 class DialogueLine(TimestampMixin, Base):

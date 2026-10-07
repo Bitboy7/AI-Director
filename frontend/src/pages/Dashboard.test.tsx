@@ -9,6 +9,9 @@ vi.mock('@/lib/api', () => ({
   listProjects: vi.fn(),
   createProject: vi.fn(),
   deleteProject: vi.fn(),
+  getStyles: vi.fn().mockResolvedValue([{ id: 'anime', label: 'Anime' }]),
+  projectCoverUrl: vi.fn((id: number) => `/api/v1/projects/${id}/cover`),
+  DEFAULT_STYLE_ID: 'anime',
 }))
 
 const project = (id: number, name: string): Project => ({

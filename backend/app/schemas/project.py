@@ -70,6 +70,54 @@ class DialogueLineRead(BaseModel):
     order: int
 
 
+class StoryboardPanelRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    fragment_id: int
+    order: int
+    title: str
+    start_seconds: int
+    end_seconds: int
+    prompt: str
+
+
+class StoryboardPanelUpdate(BaseModel):
+    title: str | None = None
+    start_seconds: int | None = None
+    end_seconds: int | None = None
+    prompt: str | None = None
+
+
+class StoryboardPanelCreate(BaseModel):
+    title: str = ""
+    start_seconds: int = 0
+    end_seconds: int = 0
+    prompt: str = ""
+
+
+class FragmentReferenceImageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    fragment_id: int
+    path: str
+    origin: str
+
+
+class FragmentVideoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    fragment_id: int
+    path: str
+    provider: str = ""
+    model: str = ""
+    resolution: str | None = None
+    cost_usd: float = 0.0
+    created_at: datetime
+
+
 class FragmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -82,7 +130,14 @@ class FragmentRead(BaseModel):
     duration: int
     status: str
     video_path: str | None
+    video_provider: str | None = None
+    video_model: str | None = None
+    resolution: str | None = None
+    cost_usd: float = 0.0
     dialogue_lines: list[DialogueLineRead] = Field(default_factory=list)
+    storyboard: list[StoryboardPanelRead] = Field(default_factory=list)
+    reference_images: list[FragmentReferenceImageRead] = Field(default_factory=list)
+    videos: list[FragmentVideoRead] = Field(default_factory=list)
 
 
 class FragmentUpdate(BaseModel):
@@ -93,6 +148,9 @@ class FragmentUpdate(BaseModel):
     duration: int | None = None
     status: str | None = None
     video_path: str | None = None
+    video_provider: str | None = None
+    video_model: str | None = None
+    resolution: str | None = None
     dialogues: list[DialogueLineWrite] | None = None
 
 

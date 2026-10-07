@@ -10,8 +10,10 @@ from app.models.base import TimestampMixin
 class JobType(enum.Enum):
     script_gen = "script_gen"
     resource_gen = "resource_gen"
+    resource_image_gen = "resource_image_gen"
     image_gen = "image_gen"
     video_gen = "video_gen"
+    storyboard_gen = "storyboard_gen"
     tts = "tts"
     episode_assembly = "episode_assembly"
 

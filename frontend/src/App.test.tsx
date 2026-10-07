@@ -8,5 +8,5 @@ test('renders dashboard title', () => {
       <App />
     </MemoryRouter>,
   )
-  expect(screen.getByText(/AI Director/i)).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /AI Director/i })).toBeInTheDocument()
 })
